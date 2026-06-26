@@ -50,8 +50,6 @@ static void beacon_spam_task(void *pv) {
     }
     
     uint64_t total_beacons = 0;
-    int current_entry = 0;
-    int current_instance = 0;
     
     while (g_spam_running) {
         for (int entry_idx = 0; entry_idx < g_beacon_count && g_spam_running; entry_idx++) {
