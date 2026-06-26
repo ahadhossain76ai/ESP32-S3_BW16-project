@@ -1,0 +1,1604 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>PWN DUAL // H4CK3R</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@700;900&family=Rajdhani:wght@400;500;600;700&display=swap');
+
+  :root {
+    --bg:        #080b0f;
+    --bg2:       #0d1117;
+    --bg3:       #111820;
+    --panel:     #0a1220;
+    --border:    #1a2d45;
+    --border2:   #0f4a6e;
+    --accent:    #00d4ff;
+    --accent2:   #ff3c6e;
+    --accent3:   #39ff14;
+    --warn:      #ffb800;
+    --dim:       #3a5068;
+    --text:      #c8dae8;
+    --text2:     #5e8099;
+    --text3:     #8ba8be;
+    --mono:      'Share Tech Mono', monospace;
+    --display:   'Orbitron', sans-serif;
+    --body:      'Rajdhani', sans-serif;
+    --glow:      0 0 8px rgba(0,212,255,0.4);
+    --glow2:     0 0 8px rgba(255,60,110,0.4);
+    --glow3:     0 0 8px rgba(57,255,20,0.4);
+    --radius:    4px;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--body);
+    font-size: 14px;
+    min-height: 100vh;
+    overflow-x: hidden;
+    line-height: 1.6;
+  }
+
+  body::after {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background: repeating-linear-gradient(0deg, transparent 0px, transparent 2px, rgba(0,0,0,0.05) 2px, rgba(0,0,0,0.05) 4px);
+    pointer-events: none;
+    z-index: 9999;
+  }
+
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: var(--bg); }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  .header {
+    background: linear-gradient(135deg, #080b0f 0%, #0a1525 100%);
+    border-bottom: 1px solid var(--border2);
+    padding: 0 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 52px;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+
+  .logo {
+    font-family: var(--display);
+    font-size: 16px;
+    font-weight: 900;
+    letter-spacing: 3px;
+    color: var(--accent);
+    text-shadow: var(--glow);
+  }
+  .logo span { color: var(--accent2); text-shadow: var(--glow2); }
+  .logo-sub {
+    font-family: var(--mono);
+    font-size: 8px;
+    color: var(--text2);
+    letter-spacing: 2px;
+    margin-top: 1px;
+  }
+
+  .status-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-family: var(--mono);
+    font-size: 9px;
+  }
+
+  .status-chip {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg2);
+    color: var(--text2);
+    transition: all 0.3s;
+  }
+  .status-chip.online {
+    border-color: rgba(57,255,20,0.2);
+    color: var(--accent3);
+  }
+  .status-chip.offline {
+    border-color: rgba(255,60,110,0.15);
+    color: var(--dim);
+  }
+  .dot {
+    width: 5px; height: 5px;
+    border-radius: 50%;
+    display: inline-block;
+  }
+  .dot.online { background: var(--accent3); box-shadow: var(--glow3); animation: pulse 2s infinite; }
+  .dot.offline { background: var(--dim); }
+
+  @keyframes pulse {
+    0%,100% { opacity: 1; }
+    50% { opacity: 0.3; }
+  }
+
+  .nav {
+    background: var(--bg2);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    overflow-x: auto;
+    padding: 0 8px;
+    gap: 2px;
+    scrollbar-width: none;
+  }
+  .nav::-webkit-scrollbar { display: none; }
+
+  .nav-btn {
+    flex-shrink: 0;
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: 10px 12px;
+    font-family: var(--body);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    color: var(--text2);
+    cursor: pointer;
+    transition: all 0.2s;
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .nav-btn:hover { color: var(--text); border-bottom-color: var(--border2); }
+  .nav-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+  .main { padding: 12px; max-width: 960px; margin: 0 auto; }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    display: none;
+    animation: fadeIn 0.2s ease;
+  }
+  .panel.active { display: block; }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(4px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  .panel-header {
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .panel-title {
+    font-family: var(--display);
+    font-size: 12px;
+    letter-spacing: 2px;
+    color: var(--accent);
+    text-shadow: var(--glow);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .panel-title.red { color: var(--accent2); text-shadow: var(--glow2); }
+  .panel-title.green { color: var(--accent3); text-shadow: var(--glow3); }
+
+  .template-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 10px;
+    margin: 8px 0;
+  }
+  @media (max-width: 700px) {
+    .template-grid { grid-template-columns: 1fr 1fr; }
+  }
+  @media (max-width: 450px) {
+    .template-grid { grid-template-columns: 1fr; }
+  }
+
+  .template-card {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    transition: all 0.2s;
+    cursor: pointer;
+  }
+  .template-card:hover {
+    border-color: var(--accent3);
+    box-shadow: 0 0 10px rgba(57,255,20,0.05);
+  }
+  .template-icon { font-size: 28px; text-align: center; }
+  .template-name { font-family: var(--display); font-size: 11px; letter-spacing: 1px; color: var(--text); text-align: center; }
+  .template-desc { font-size: 10px; color: var(--text2); text-align: center; line-height: 1.4; }
+  .template-meta { display: flex; gap: 4px; flex-wrap: wrap; justify-content: center; }
+
+  .tag {
+    font-family: var(--mono);
+    font-size: 8px;
+    padding: 2px 5px;
+    border-radius: 2px;
+    letter-spacing: 1px;
+  }
+  .tag-blue { background: rgba(0,212,255,0.1); color: var(--accent); border: 1px solid rgba(0,212,255,0.2); }
+  .tag-red  { background: rgba(255,60,110,0.1); color: var(--accent2); border: 1px solid rgba(255,60,110,0.2); }
+  .tag-green { background: rgba(57,255,20,0.1); color: var(--accent3); border: 1px solid rgba(57,255,20,0.2); }
+
+  .panel-body { padding: 14px; }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    font-family: var(--body);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    padding: 8px 16px;
+    border: 1px solid;
+    border-radius: var(--radius);
+    cursor: pointer;
+    transition: all 0.15s;
+    white-space: nowrap;
+  }
+  .btn-primary {
+    background: rgba(0,212,255,0.08);
+    border-color: var(--accent);
+    color: var(--accent);
+  }
+  .btn-primary:hover { background: rgba(0,212,255,0.18); box-shadow: var(--glow); }
+  .btn-danger {
+    background: rgba(255,60,110,0.08);
+    border-color: var(--accent2);
+    color: var(--accent2);
+  }
+  .btn-danger:hover { background: rgba(255,60,110,0.18); box-shadow: var(--glow2); }
+  .btn-success {
+    background: rgba(57,255,20,0.08);
+    border-color: var(--accent3);
+    color: var(--accent3);
+  }
+  .btn-success:hover { background: rgba(57,255,20,0.18); box-shadow: var(--glow3); }
+  .btn-ghost {
+    background: transparent;
+    border-color: var(--border);
+    color: var(--text2);
+  }
+  .btn-ghost:hover { border-color: var(--text2); color: var(--text); }
+  .btn-sm { font-size: 10px; padding: 5px 10px; }
+  .btn-xs { font-size: 9px; padding: 3px 7px; }
+  .btn:disabled { opacity: 0.3; cursor: not-allowed; }
+  .btn-block { width: 100%; justify-content: center; }
+
+  .btn-accent {
+    background: rgba(0,212,255,0.08);
+    border-color: var(--accent);
+    color: var(--accent);
+    font-family: var(--body);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    padding: 8px 16px;
+    border: 1px solid;
+    border-radius: var(--radius);
+    cursor: pointer;
+    transition: all 0.15s;
+    white-space: nowrap;
+  }
+  .btn-accent:hover { background: rgba(0,212,255,0.18); box-shadow: var(--glow); }
+
+  .input-field {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 7px 10px;
+    width: 100%;
+    transition: border-color 0.15s;
+  }
+  .input-field:focus { outline: none; border-color: var(--accent); box-shadow: var(--glow); }
+  .input-field::placeholder { color: var(--dim); }
+
+  .styled-select {
+    background: var(--bg2);
+    border: 1px solid var(--border2);
+    border-radius: var(--radius);
+    color: var(--text);
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 7px 10px;
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%2300d4ff'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    padding-right: 28px;
+    cursor: pointer;
+    min-width: 120px;
+  }
+  .styled-select:focus { outline: none; border-color: var(--accent); }
+  .styled-select option { background: var(--bg2); color: var(--text); }
+
+  .wifi-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin: 10px 0;
+  }
+  @media (max-width: 600px) {
+    .wifi-grid { grid-template-columns: 1fr; }
+  }
+
+  .wifi-col {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+    min-height: 100px;
+    max-height: 240px;
+    overflow-y: auto;
+  }
+
+  .wifi-col-header {
+    font-family: var(--mono);
+    font-size: 9px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    color: var(--text2);
+  }
+  .wifi-col-header.blue { color: var(--accent); border-bottom-color: rgba(0,212,255,0.2); }
+  .wifi-col-header.red { color: var(--accent2); border-bottom-color: rgba(255,60,110,0.2); }
+  .wifi-col-header .count { font-size: 8px; opacity: 0.6; }
+
+  .wifi-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border-bottom: 1px solid rgba(26,45,69,0.5);
+    cursor: pointer;
+    transition: background 0.1s;
+  }
+  .wifi-item:last-child { border-bottom: none; }
+  .wifi-item:hover { background: rgba(0,212,255,0.03); }
+  .wifi-item.selected { background: rgba(0,212,255,0.06); border-left: 2px solid var(--accent); }
+  .wifi-item.selected.red-sel { background: rgba(255,60,110,0.06); border-left-color: var(--accent2); }
+
+  .wifi-cb {
+    width: 13px; height: 13px;
+    accent-color: var(--accent);
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+
+  .wifi-name {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text);
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .wifi-name.hidden-ssid { color: var(--dim); font-style: italic; }
+
+  .wifi-meta {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    flex-shrink: 0;
+  }
+
+  .wifi-bars { display: flex; align-items: flex-end; gap: 1px; height: 10px; }
+  .bar { width: 2px; background: var(--dim); border-radius: 1px; }
+  .bar.lit { background: var(--accent3); }
+  .bar.lit.red-bar { background: var(--accent2); }
+  .b1 { height: 2px; }
+  .b2 { height: 4px; }
+  .b3 { height: 7px; }
+  .b4 { height: 10px; }
+  .ch-label { font-family: var(--mono); font-size: 8px; color: var(--text2); }
+
+  .not-connected {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100px;
+    color: var(--dim);
+    font-family: var(--mono);
+    font-size: 10px;
+    text-align: center;
+    gap: 6px;
+    padding: 14px;
+    opacity: 0.6;
+  }
+  .not-connected .nc-icon { font-size: 24px; }
+
+  .empty-state { color: var(--dim); text-align: center; padding: 16px; font-size: 10px; letter-spacing: 1px; }
+
+  .select-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 10px;
+  }
+  @media (max-width: 500px) {
+    .select-row .styled-select { flex: 1; min-width: 100%; }
+  }
+
+  .ssid-entry {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 6px;
+    flex-wrap: wrap;
+  }
+  .ssid-entry .input-field { flex: 1; min-width: 80px; }
+  .qty-input { width: 50px; flex-shrink: 0; text-align: center; }
+  .ssid-remove {
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--dim);
+    cursor: pointer;
+    padding: 3px 7px;
+    font-size: 12px;
+    transition: all 0.15s;
+    flex-shrink: 0;
+  }
+  .ssid-remove:hover { border-color: var(--accent2); color: var(--accent2); }
+
+  .jammer-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-top: 8px;
+  }
+  @media (max-width: 450px) {
+    .jammer-grid { grid-template-columns: 1fr; }
+  }
+
+  .jammer-card {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    align-items: center;
+    text-align: center;
+    transition: all 0.2s;
+  }
+  .jammer-card:hover { border-color: var(--border2); }
+  .jammer-card.active-jamming {
+    border-color: var(--accent2);
+    box-shadow: 0 0 15px rgba(255,60,110,0.1);
+    background: rgba(255,60,110,0.04);
+  }
+
+  .jammer-icon { font-size: 28px; }
+  .jammer-label { font-family: var(--display); font-size: 10px; letter-spacing: 1.5px; color: var(--text3); }
+  .jammer-status {
+    font-family: var(--mono);
+    font-size: 8px;
+    color: var(--dim);
+    letter-spacing: 1px;
+  }
+  .jammer-status.active { color: var(--accent2); font-weight: 700; }
+
+  .code-area {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--accent3);
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 10px;
+    width: 100%;
+    min-height: 120px;
+    resize: vertical;
+    line-height: 1.6;
+  }
+  .code-area:focus { outline: none; border-color: var(--accent); }
+
+  .sub-header {
+    font-family: var(--mono);
+    font-size: 9px;
+    letter-spacing: 1.5px;
+    color: var(--text2);
+    text-transform: uppercase;
+    margin: 10px 0 6px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .sub-header::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: var(--border);
+  }
+
+  .action-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-top: 8px;
+  }
+  .flex-between { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 6px; }
+  .flex-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .mt-8 { margin-top: 8px; }
+  .mt-12 { margin-top: 12px; }
+  .mb-8 { margin-bottom: 8px; }
+
+  .scan-progress {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 0;
+    font-size: 10px;
+    color: var(--text2);
+    font-family: var(--mono);
+  }
+  .scan-progress.active { display: flex; }
+  .scan-progress .bar-track { flex: 1; height: 3px; background: var(--border); border-radius: 2px; overflow: hidden; }
+  .scan-progress .bar-fill { height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent), var(--accent3)); animation: scanAnim 1.5s infinite; }
+  @keyframes scanAnim {
+    0% { width: 0%; margin-left: 0; }
+    50% { width: 50%; }
+    100% { width: 0%; margin-left: 100%; }
+  }
+
+  .captured-box {
+    background: var(--bg);
+    border: 1px solid rgba(57,255,20,0.15);
+    border-radius: var(--radius);
+    padding: 10px;
+    min-height: 40px;
+    font-family: var(--mono);
+    font-size: 10px;
+    line-height: 1.8;
+    max-height: 120px;
+    overflow-y: auto;
+  }
+  .captured-entry {
+    display: flex;
+    gap: 8px;
+    padding: 3px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.03);
+  }
+  .cap-ssid { color: var(--accent); }
+  .cap-pass { color: var(--accent3); }
+  .cap-time { color: var(--dim); font-size: 9px; }
+
+  .log-box {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 0 0 var(--radius) var(--radius);
+    padding: 8px;
+    height: 80px;
+    overflow-y: auto;
+    font-family: var(--mono);
+    font-size: 10px;
+    line-height: 1.7;
+  }
+  .log-entry { color: var(--text2); word-break: break-all; }
+  .log-entry::before { content: '> '; color: var(--accent); }
+  .log-entry.error { color: var(--accent2); }
+  .log-entry.error::before { color: var(--accent2); content: '! '; }
+  .log-entry.success { color: var(--accent3); }
+  .log-entry.success::before { color: var(--accent3); content: '✓ '; }
+  .log-entry.warn { color: var(--warn); }
+  .log-entry.warn::before { color: var(--warn); content: '⚠ '; }
+
+  .log-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 10px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-bottom: none;
+    border-radius: var(--radius) var(--radius) 0 0;
+  }
+  .log-title {
+    font-family: var(--mono);
+    font-size: 9px;
+    letter-spacing: 1px;
+    color: var(--text2);
+    text-transform: uppercase;
+  }
+
+  .log-section {
+    display: flex;
+    flex-direction: column;
+  }
+
+  .upload-zone {
+    border: 1px dashed var(--border2);
+    border-radius: var(--radius);
+    padding: 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.2s;
+    background: var(--bg2);
+  }
+  .upload-zone:hover { border-color: var(--accent); background: rgba(0,212,255,0.02); }
+
+  .upload-zone-content {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+  }
+  .upload-icon { font-size: 28px; }
+  .upload-text {
+    font-family: var(--body);
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--text2);
+  }
+  .upload-hint {
+    font-family: var(--mono);
+    font-size: 9px;
+    color: var(--dim);
+  }
+
+  .file-list {
+    margin: 6px 0;
+  }
+  .file-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 10px;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    font-size: 11px;
+  }
+  .file-icon { flex-shrink: 0; }
+  .file-name { font-family: var(--mono); flex: 1; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .file-size { font-family: var(--mono); font-size: 9px; color: var(--text2); flex-shrink: 0; }
+
+  /* Duck Script textarea */
+  .ducky-textarea {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    color: var(--accent3);
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 10px;
+    width: 100%;
+    resize: vertical;
+    line-height: 1.6;
+  }
+  .ducky-textarea:focus { outline: none; border-color: var(--accent); }
+
+  .fixed-textarea {
+    height: 140px;
+  }
+
+  /* Ducky Mode Tabs */
+  .ducky-mode-tabs {
+    display: flex;
+    gap: 4px;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 3px;
+  }
+  .ducky-mode-btn {
+    flex: 1;
+    background: none;
+    border: none;
+    border-radius: 3px;
+    padding: 8px 12px;
+    font-family: var(--body);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text2);
+    cursor: pointer;
+    transition: all 0.2s;
+    letter-spacing: 0.5px;
+  }
+  .ducky-mode-btn.active {
+    background: var(--bg3);
+    color: var(--accent);
+    border: 1px solid var(--border2);
+  }
+  .ducky-mode-btn:hover:not(.active) { color: var(--text); }
+
+  .ducky-section { display: block; }
+
+  .ducky-preview {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 8px;
+  }
+  .ducky-preview-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text2);
+    letter-spacing: 1px;
+    opacity: 0.7;
+  }
+  #duckyFilePreview {
+    height: 80px;
+  }
+
+  .captured-section {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .captured-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 10px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-bottom: none;
+    border-radius: var(--radius) var(--radius) 0 0;
+    font-family: var(--mono);
+    font-size: 9px;
+    letter-spacing: 1px;
+    color: var(--text2);
+    text-transform: uppercase;
+  }
+</style>
+</head>
+<body>
+
+<!-- ==================== HEADER ==================== -->
+<header class="header">
+  <div>
+    <div class="logo">PWN<span>DUAL</span></div>
+    <div class="logo-sub">ESP32-S3 + BW16 // AHAD ELECTROLAB</div>
+  </div>
+  <div class="status-bar">
+    <div class="status-chip online" id="espStatus">
+      <span class="dot online" id="espDot"></span> ESP32
+    </div>
+    <div class="status-chip offline" id="bwStatus">
+      <span class="dot offline" id="bwDot"></span> BW16
+    </div>
+  </div>
+</header>
+
+<!-- ==================== NAVIGATION ==================== -->
+<nav class="nav">
+  <button class="nav-btn active" data-panel="wifi-attack">📡 WiFi Attack</button>
+  <button class="nav-btn" data-panel="beacon-spam">📶 Beacon Spam</button>
+  <button class="nav-btn" data-panel="jammer">🚫 Jammer</button>
+  <button class="nav-btn" data-panel="ducky">🦆 WiFi Duck</button>
+  <button class="nav-btn" data-panel="templates">⚡ Templates</button>
+</nav>
+
+<!-- ==================== MAIN ==================== -->
+<main class="main">
+
+<!-- ########## PANEL: WiFi Attack ########## -->
+<div id="panel-wifi-attack" class="panel active">
+  <div class="panel-header">
+    <div class="panel-title">⚡ WIFI ATTACK</div>
+    <div class="tag tag-blue">2.4GHz + 5GHz</div>
+  </div>
+  <div class="panel-body">
+
+    <div class="flex-between">
+      <button class="btn btn-primary btn-sm" id="scanBtn">🔍 SCAN</button>
+      <span id="scanStatus" style="font-family:var(--mono);font-size:9px;color:var(--dim)">// ready</span>
+    </div>
+
+    <div class="scan-progress" id="scanProgress">
+      <span>Scanning...</span>
+      <div class="bar-track"><div class="bar-fill"></div></div>
+    </div>
+
+    <div id="scanResultsContainer" style="display:none;">
+      <div class="sub-header">// scan results</div>
+      <div class="wifi-grid">
+        <div>
+          <div class="wifi-col">
+            <div class="wifi-col-header blue">
+              <span>📡 2.4GHz <span class="tag tag-blue">ESP32-S3</span></span>
+              <span class="count" id="count24">0</span>
+            </div>
+            <div id="scanResults24"><div class="empty-state">No networks.</div></div>
+          </div>
+        </div>
+        <div>
+          <div class="wifi-col">
+            <div class="wifi-col-header red">
+              <span>📡 5GHz <span class="tag tag-red">BW16</span></span>
+              <span class="count" id="count5">0</span>
+            </div>
+            <div id="scanResults5">
+              <div class="not-connected" id="bwOfflineMsg">
+                5GHz Module Not Connected<br>
+                <span style="font-size:8px;opacity:0.6">BW16 RTL8720DN offline</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="select-row" style="flex-wrap:wrap;">
+        <select class="styled-select" id="attackSelect">
+          <option value="">── SELECT ATTACK ──</option>
+          <option value="deauth">⚡ Deauth</option>
+          <option value="eviltwin">👥 EvilTwin</option>
+        </select>
+
+        <div id="eviltwinPhishContainer" style="display:none;align-items:center;gap:6px;">
+          <span style="font-family:var(--mono);font-size:9px;color:var(--text2);">📄 Phishing Page:</span>
+          <select class="styled-select" id="eviltwinPhishSelect" style="min-width:160px;">
+            <option value="">── SELECT .html ──</option>
+          </select>
+        </div>
+
+        <button class="btn btn-danger" id="runAttackBtn" disabled>▶ RUN</button>
+        <button class="btn btn-ghost btn-sm" id="stopAttackBtn">■ STOP</button>
+      </div>
+    </div>
+
+    <div class="sub-header mt-8">// captured data</div>
+    <div class="captured-box" id="capturedBox">
+      <div class="empty-state">// no data captured yet</div>
+    </div>
+
+    <div class="log-header">
+      <span class="log-title">⬛ ATTACK LOG</span>
+      <button class="btn btn-ghost btn-xs" onclick="document.getElementById('attackLog').innerHTML=''">CLEAR</button>
+    </div>
+    <div class="log-box" id="attackLog">
+      <div class="log-entry info">System ready.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ########## PANEL: Beacon Spam ########## -->
+<div id="panel-beacon-spam" class="panel">
+  <div class="panel-header">
+    <div class="panel-title red">📶 WIFI BEACON SPAM</div>
+    <div class="tag tag-blue">ESP32-S3</div>
+  </div>
+  <div class="panel-body">
+
+    <div class="sub-header">// fake ssid list</div>
+    <div id="ssidList"></div>
+    <div class="action-row">
+      <button class="btn btn-ghost btn-sm" id="addSsidBtn">＋ ADD SSID</button>
+    </div>
+
+    <div class="action-row mt-8">
+      <button class="btn btn-danger" id="runBeaconBtn">▶ RUN BEACON SPAM</button>
+      <button class="btn btn-ghost btn-sm" id="stopBeaconBtn">■ STOP</button>
+    </div>
+
+    <div class="log-header">
+      <span class="log-title">⬛ BEACON LOG</span>
+      <button class="btn btn-ghost btn-xs" onclick="document.getElementById('beaconLog').innerHTML=''">CLEAR</button>
+    </div>
+    <div class="log-box" id="beaconLog">
+      <div class="log-entry info">Beacon spam idle.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ########## PANEL: Jammer ########## -->
+<div id="panel-jammer" class="panel">
+  <div class="panel-header">
+    <div class="panel-title red">🚫 JAMMER</div>
+    <div class="tag tag-red">ACTIVE NOISE</div>
+  </div>
+  <div class="panel-body">
+    <div class="jammer-grid">
+      <div class="jammer-card" id="wifiJammerCard">
+        <div class="jammer-icon">📡</div>
+        <div class="jammer-label">WIFI JAMMER</div>
+        <div style="font-size:10px;color:var(--text2);line-height:1.5">
+          Floods 2.4GHz + 5GHz.<br>
+          All nearby SSIDs disappear.
+        </div>
+        <div class="tag tag-blue" style="margin:4px 0">ESP32→2.4G | BW16→5G</div>
+        <button class="btn btn-danger btn-sm btn-block" id="wifiJammerBtn">START WIFI JAMMING</button>
+        <div class="jammer-status" id="wifiJammerStatus">● INACTIVE</div>
+      </div>
+      <div class="jammer-card" id="btJammerCard">
+        <div class="jammer-icon">🔵</div>
+        <div class="jammer-label">BT JAMMER</div>
+        <div style="font-size:10px;color:var(--text2);line-height:1.5">
+          Floods BLE + Classic BT.<br>
+          All BT devices go invisible.
+        </div>
+        <div class="tag tag-blue" style="margin:4px 0">ESP32-S3</div>
+        <button class="btn btn-danger btn-sm btn-block" id="btJammerBtn">START BT JAMMING</button>
+        <div class="jammer-status" id="btJammerStatus">● INACTIVE</div>
+      </div>
+    </div>
+
+    <div class="log-header">
+      <span class="log-title">⬛ JAMMER LOG</span>
+      <button class="btn btn-ghost btn-xs" onclick="document.getElementById('jammerLog').innerHTML=''">CLEAR</button>
+    </div>
+    <div class="log-box" id="jammerLog">
+      <div class="log-entry info">Jammer idle.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ########## PANEL: WiFi Duck ########## -->
+<div id="panel-ducky" class="panel">
+  <div class="panel-header">
+    <div class="panel-title">🦆 WIFI DUCK</div>
+    <span style="font-family:var(--mono);font-size:9px;color:var(--text2);">DigiSpark · HID Injection</span>
+  </div>
+  <div class="panel-body" style="padding:14px;display:flex;flex-direction:column;gap:12px;">
+
+    <!-- Dual Mode Tabs -->
+    <div class="ducky-mode-tabs">
+      <button class="ducky-mode-btn active" data-mode="write">✏️ WRITE</button>
+      <button class="ducky-mode-btn" data-mode="file">📁 FROM FILE</button>
+    </div>
+
+    <!-- Write Mode -->
+    <div class="ducky-section" id="duckyWriteSection">
+      <textarea id="duckyPayload" class="ducky-textarea fixed-textarea" placeholder="WAITING 1&#10;GUI r&#10;DELAY 50&#10;STRING cmd&#10;ENTER&#10;DELAY 100&#10;STRING powershell -w hidden -e ..."></textarea>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+        <button class="btn btn-accent" id="duckyInjectBtn">▶ INJECT</button>
+        <button class="btn btn-ghost btn-sm" id="duckyClearBtn">↺ CLEAR</button>
+      </div>
+    </div>
+
+    <!-- From File Mode (Upload .txt Script) — stored script removed, upload added -->
+    <div class="ducky-section" id="duckyFileSection" style="display:none;">
+      <div class="upload-zone" id="duckyUploadZone">
+        <input type="file" id="duckyFileInput" accept=".txt" style="display:none;">
+        <div class="upload-zone-content">
+          <span class="upload-icon">📂</span>
+          <span class="upload-text">SELECT .TXT SCRIPT</span>
+          <span class="upload-hint">Upload a Ducky Script .txt file from your device</span>
+        </div>
+      </div>
+      <div id="duckyFileList" class="file-list"></div>
+      <button class="btn btn-accent" id="duckyFileInjectBtn">▶ INJECT FILE</button>
+      <div class="ducky-preview">
+        <span class="ducky-preview-label">PREVIEW</span>
+        <textarea id="duckyFilePreview" class="ducky-textarea" readonly placeholder="// script preview will appear here"></textarea>
+      </div>
+    </div>
+
+    <!-- Captured Output -->
+    <div class="captured-section">
+      <div class="captured-header">
+        <span>📦 CAPTURED OUTPUT</span>
+        <button class="btn btn-ghost btn-xs" id="duckyClearCaptured">CLEAR</button>
+      </div>
+      <div id="duckyCapturedBox" class="captured-box">
+        <div class="empty-state">// no output captured yet</div>
+      </div>
+    </div>
+
+    <!-- Attack Log -->
+    <div class="log-section">
+      <div class="log-header">⚡ DUCKY LOG</div>
+      <div id="duckyLog" class="log-box"></div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ########## PANEL: Templates ########## -->
+<div id="panel-templates" class="panel">
+  <div class="panel-header">
+    <div class="panel-title green">⚡ ATTACK TEMPLATES</div>
+    <div class="tag tag-green">ONE-CLICK</div>
+  </div>
+  <div class="panel-body">
+    <div class="template-grid" id="templateGrid"></div>
+    <div class="log-header"><span class="log-title">⬛ TEMPLATE LOG</span></div>
+    <div class="log-box" id="templateLog">
+      <div class="log-entry info">Templates loaded. Click to deploy.</div>
+    </div>
+  </div>
+</div>
+
+</main>
+
+<!-- ==================== JAVASCRIPT ==================== -->
+<script>
+(function() {
+  'use strict';
+
+  // ==================== CONFIGURATION ====================
+  const CONFIG = {
+    SCAN_24:         '/api/scan',
+    SCAN_5:          '/api/scan?type=full',
+    DEAUTH_START:    '/api/deauth/start',
+    DEAUTH_STOP:     '/api/deauth/stop',
+    EVILTWIN_START:  '/api/eviltwin/start',
+    EVILTWIN_STOP:   '/api/eviltwin/stop',
+    BEACON_START:    '/api/beacon/start',
+    BEACON_STOP:     '/api/beacon/stop',
+    JAMMER_WIFI:     '/api/jammer/wifi',
+    JAMMER_BT:       '/api/jammer/bt',
+    JAMMER_STOP:     '/api/jammer/stop',
+    DUCKY_INJECT:    '/api/ducky/inject',
+    CAPTURED:        '/api/captured',
+    STATUS:          '/api/status',
+    FILES_LIST:      '/api/files/list',
+    TEMPLATES_LIST:  '/api/templates/list',
+    TEMPLATES_DEPLOY:'/api/templates/deploy',
+  };
+
+  // ==================== STATE ====================
+  const state = {
+    scanResults24: [],
+    scanResults5:  [],
+    selectedTargets: [],
+    isScanning: false,
+    espOnline: false,
+    bwOnline: false,
+    wifiJammerActive: false,
+    btJammerActive: false,
+    cachedFishingFiles: [],
+  };
+
+  // ==================== HELPERS ====================
+  const $ = id => document.getElementById(id);
+
+  function addLog(logId, msg, type) {
+    type = type || 'info';
+    const log = $(logId);
+    if (!log) return;
+    const entry = document.createElement('div');
+    entry.className = 'log-entry ' + type;
+    entry.textContent = msg;
+    log.appendChild(entry);
+    log.scrollTop = log.scrollHeight;
+  }
+
+  function escapeHtml(str) {
+    if (!str) return '';
+    return document.createElement('div').textContent = str;
+  }
+
+  function rssiBars(rssi) {
+    return Math.min(Math.max(Math.round((rssi + 100) / 25), 1), 4);
+  }
+
+  async function api(endpoint, method, body) {
+    method = method || 'GET';
+    try {
+      const opts = { method, headers: { 'Content-Type': 'application/json' } };
+      if (body) opts.body = JSON.stringify(body);
+      const res = await fetch(endpoint, opts);
+      const text = await res.text();
+      try { return JSON.parse(text); } catch(e) { return { raw: text, success: res.ok }; }
+    } catch(err) {
+      console.error('API Error:', err);
+      return { success: false, error: err.message };
+    }
+  }
+
+  // ==================== STATUS POLLING ====================
+  async function pollStatus() {
+    const res = await api(CONFIG.STATUS);
+    if (res.esp32 || res.status) {
+      state.espOnline = true;
+      const c = $('espStatus'), d = $('espDot');
+      if (c) c.className = 'status-chip online';
+      if (d) d.className = 'dot online';
+    }
+    if (res.bw16 === 'Connected' || res.bw16_online) {
+      state.bwOnline = true;
+      const c = $('bwStatus'), d = $('bwDot');
+      if (c) c.className = 'status-chip online';
+      if (d) d.className = 'dot online';
+    }
+  }
+
+  // ==================== SCAN ====================
+  async function runScan() {
+    if (state.isScanning) return;
+    state.isScanning = true;
+
+    const btn = $('scanBtn'), progress = $('scanProgress'), container = $('scanResultsContainer'), status = $('scanStatus');
+    if (btn) btn.disabled = true;
+    if (progress) progress.classList.add('active');
+    if (status) status.textContent = '// scanning...';
+    if (container) container.style.display = 'block';
+
+    addLog('attackLog', 'Scanning for networks...', 'info');
+
+    const res24 = await api(CONFIG.SCAN_24);
+    state.scanResults24 = res24.networks || [];
+
+    state.scanResults5 = [];
+    if (state.bwOnline) {
+      const res5 = await api(CONFIG.SCAN_5);
+      state.scanResults5 = res5.networks || [];
+    }
+
+    renderNetworks(state.scanResults24, 'scanResults24', 'count24', false);
+    if (state.bwOnline && state.scanResults5.length > 0) {
+      renderNetworks(state.scanResults5, 'scanResults5', 'count5', true);
+    } else if (!state.bwOnline) {
+      const c5 = $('scanResults5');
+      if (c5) c5.innerHTML = '<div class="not-connected"></div>5GHz Module Not Connected<br><span style="font-size:8px;opacity:0.6">BW16 RTL8720DN offline</span></div>';
+      if ($('count5')) $('count5').textContent = '0';
+    }
+
+    addLog('attackLog', `Scan complete: ${state.scanResults24.length} (2.4GHz) + ${state.scanResults5.length} (5GHz)`, 'success');
+    if (status) status.textContent = `// ${state.scanResults24.length} + ${state.scanResults5.length}`;
+    if (btn) btn.disabled = false;
+    if (progress) progress.classList.remove('active');
+    state.isScanning = false;
+  }
+
+  function renderNetworks(networks, containerId, countId, is5GHz) {
+    const container = $(containerId), countEl = $(countId);
+    if (!container) return;
+    if (!networks || networks.length === 0) {
+      container.innerHTML = '<div class="empty-state">No networks found.</div>';
+      if (countEl) countEl.textContent = '0';
+      return;
+    }
+    if (countEl) countEl.textContent = networks.length;
+    let html = '';
+    networks.forEach((net, idx) => {
+      const ssid = net.ssid || '';
+      const isHidden = !ssid.trim();
+      const displaySsid = isHidden ? '<Hidden SSID>' : ssid;
+      const bars = rssiBars(net.rssi || -90);
+      const selClass = is5GHz ? 'red-sel' : '';
+      const barColor = is5GHz ? 'red-bar' : '';
+      html += `<div class="wifi-item ${selClass}">`;
+      html += `<input type="checkbox" class="wifi-cb" data-idx="${idx}" data-band="${is5GHz ? '5' : '24'}">`;
+      html += `<span class="wifi-name ${isHidden ? 'hidden-ssid' : ''}">${escapeHtml(displaySsid)}</span>`;
+      html += `<div class="wifi-meta"><div class="wifi-bars">`;
+      for (let b = 1; b <= 4; b++) html += `<div class="bar b${b}${b <= bars ? ' lit ' + barColor : ''}"></div>`;
+      html += `</div><span class="ch-label">ch${net.channel || '?'}</span></div></div>`;
+    });
+    container.innerHTML = html;
+    container.querySelectorAll('.wifi-cb').forEach(cb => {
+      cb.addEventListener('change', updateSelectedTargets);
+    });
+  }
+
+  function updateSelectedTargets() {
+    state.selectedTargets = [];
+    document.querySelectorAll('.wifi-cb:checked').forEach(cb => {
+      const idx = parseInt(cb.dataset.idx);
+      const band = cb.dataset.band;
+      const list = band === '5' ? state.scanResults5 : state.scanResults24;
+      if (list && list[idx]) state.selectedTargets.push({ ...list[idx], is_5ghz: band === '5' });
+    });
+    if ($('attackSelect').value !== 'eviltwin') {
+      $('runAttackBtn').disabled = state.selectedTargets.length === 0;
+    }
+  }
+
+  // ==================== EVILTWIN: Load DevilTwin/ Pages ====================
+  async function loadEviltwinPhishingPages() {
+    const res = await api(CONFIG.FILES_LIST);
+    const files = res.files || [];
+    const devilTwinFiles = files.filter(f => f.startsWith('DevilTwin/') && f.toLowerCase().endsWith('.html'));
+    const select = $('eviltwinPhishSelect');
+    if (!select) return;
+    select.innerHTML = '<option value="">── DEVILTWIN PAGE ──</option>';
+    devilTwinFiles.forEach(f => {
+      const opt = document.createElement('option');
+      opt.value = f;
+      opt.textContent = f.replace(/^DevilTwin\//, '');
+      select.appendChild(opt);
+    });
+    if (devilTwinFiles.length === 0) {
+      select.innerHTML = '<option value="">── NO PAGES IN DEVILTWIN/ ──</option>';
+    }
+  }
+
+  // ==================== BEACON: Load Fishing_Web/ Pages ====================
+  async function loadFishingWebFiles() {
+    const res = await api(CONFIG.FILES_LIST);
+    const files = res.files || [];
+    return files.filter(f => f.startsWith('Fishing_Web/') && f.toLowerCase().endsWith('.html'));
+  }
+
+  // ==================== ATTACK CONTROLS ====================
+  function onAttackTypeChange() {
+    const attackType = $('attackSelect').value;
+    const container = document.getElementById('eviltwinPhishContainer');
+    const runBtn = $('runAttackBtn');
+    if (attackType === 'eviltwin') {
+      container.style.display = 'inline-flex';
+      runBtn.disabled = $('eviltwinPhishSelect').value === '';
+    } else {
+      container.style.display = 'none';
+      runBtn.disabled = state.selectedTargets.length === 0;
+    }
+  }
+
+  function onPhishSelectChange() {
+    $('runAttackBtn').disabled = $('eviltwinPhishSelect').value === '';
+  }
+
+  async function runAttack() {
+    const attackType = $('attackSelect').value;
+    if (!attackType) { addLog('attackLog', 'ERROR: Select an attack type', 'error'); return; }
+    if (state.selectedTargets.length === 0 && attackType !== 'eviltwin') {
+      addLog('attackLog', 'ERROR: No targets selected', 'error'); return;
+    }
+    const targets = state.selectedTargets.map(t => ({
+      bssid: t.bssid || '', ssid: t.ssid || '', channel: t.channel || 1, is_5ghz: t.is_5ghz || false
+    }));
+    addLog('attackLog', `Launching ${attackType.toUpperCase()} on ${targets.length} target(s)...`, 'warn');
+
+    if (attackType === 'deauth') {
+      const res = await api(CONFIG.DEAUTH_START, 'POST', { targets });
+      if (res.status === 'ok' || res.success) addLog('attackLog', 'Deauth attack started!', 'success');
+      else addLog('attackLog', `Deauth failed: ${res.error || 'Unknown'}`, 'error');
+    } else if (attackType === 'eviltwin') {
+      const phishSelect = $('eviltwinPhishSelect');
+      const phishPage = phishSelect ? phishSelect.value : '';
+      if (!phishPage) { addLog('attackLog', 'ERROR: Select a DevilTwin phishing .html page', 'error'); return; }
+      const target = targets[0];
+      const res = await api(CONFIG.EVILTWIN_START, 'POST', {
+        ssid: target.ssid, bssid: target.bssid, channel: target.channel, is_5ghz: target.is_5ghz, phishing_page: phishPage
+      });
+      if (res.status === 'ok' || res.success) addLog('attackLog', `EvilTwin started on '${target.ssid}' with DevilTwin page`, 'success');
+      else addLog('attackLog', `EvilTwin failed: ${res.error || 'Unknown'}`, 'error');
+    }
+  }
+
+  async function stopAttack() {
+    await api(CONFIG.DEAUTH_STOP);
+    await api(CONFIG.EVILTWIN_STOP);
+    addLog('attackLog', 'All attacks stopped', 'info');
+  }
+
+  // ==================== BEACON SPAM ====================
+  let ssidCounter = 0;
+
+  function addSsidEntry(ssidVal, qtyVal) {
+    const list = $('ssidList');
+    const div = document.createElement('div');
+    div.className = 'ssid-entry';
+    let fishOptions = '<option value="">No Phishing</option>';
+    state.cachedFishingFiles.forEach(f => {
+      fishOptions += `<option value="${f}">${f.replace(/^Fishing_Web\//, '')}</option>`;
+    });
+    div.innerHTML = `
+      <input class="input-field" type="text" placeholder="Fake SSID..." value="${escapeHtml(ssidVal || '')}">
+      <input class="input-field qty-input" type="number" value="${qtyVal || 1}" min="1" max="99" placeholder="Qty">
+      <select class="styled-select" style="min-width:110px;flex:none;">${fishOptions}</select>
+      <button class="ssid-remove">✕</button>
+    `;
+    div.querySelector('.ssid-remove').addEventListener('click', () => div.remove());
+    list.appendChild(div);
+    ssidCounter++;
+  }
+
+  async function runBeaconSpam() {
+    const entries = document.querySelectorAll('#ssidList .ssid-entry');
+    const ssids = [], quantities = [], fishingPages = [];
+    entries.forEach(e => {
+      const inputs = e.querySelectorAll('input'), selects = e.querySelectorAll('select');
+      const name = inputs[0] ? inputs[0].value.trim() : '';
+      const qty = inputs[1] ? parseInt(inputs[1].value) || 1 : 1;
+      const fish = selects[0] ? selects[0].value : '';
+      if (name) { ssids.push(name); quantities.push(qty); fishingPages.push(fish || ''); }
+    });
+    if (ssids.length === 0) { addLog('beaconLog', 'ERROR: Add at least one SSID', 'error'); return; }
+    addLog('beaconLog', `Starting beacon spam: ${ssids.length} SSID config(s)...`, 'warn');
+    const res = await api(CONFIG.BEACON_START, 'POST', { ssids, quantities, fishing_pages: fishingPages });
+    if (res.status === 'ok' || res.success) addLog('beaconLog', 'Beacon spam active!', 'success');
+    else addLog('beaconLog', `Failed: ${res.error || 'Unknown'}`, 'error');
+  }
+
+  async function stopBeaconSpam() {
+    await api(CONFIG.BEACON_STOP);
+    addLog('beaconLog', 'Beacon spam stopped', 'info');
+  }
+
+  // ==================== JAMMER ====================
+  async function toggleWifiJammer() {
+    if (state.wifiJammerActive) {
+      await api(CONFIG.JAMMER_STOP);
+      state.wifiJammerActive = false;
+      $('wifiJammerBtn').textContent = 'START WIFI JAMMING';
+      $('wifiJammerStatus').textContent = '● INACTIVE';
+      $('wifiJammerStatus').className = 'jammer-status';
+      $('wifiJammerCard').classList.remove('active-jamming');
+      addLog('jammerLog', 'WiFi jammer stopped', 'info');
+    } else {
+      const res = await api(CONFIG.JAMMER_WIFI);
+      if (res.status === 'ok' || res.success) {
+        state.wifiJammerActive = true;
+        $('wifiJammerBtn').textContent = '■ STOP WIFI JAMMING';
+        $('wifiJammerStatus').textContent = '● ACTIVE';
+        $('wifiJammerStatus').className = 'jammer-status active';
+        $('wifiJammerCard').classList.add('active-jamming');
+        addLog('jammerLog', 'WiFi jammer ACTIVE — flooding all channels!', 'warn');
+      }
+    }
+  }
+
+  async function toggleBtJammer() {
+    if (state.btJammerActive) {
+      await api(CONFIG.JAMMER_STOP);
+      state.btJammerActive = false;
+      $('btJammerBtn').textContent = 'START BT JAMMING';
+      $('btJammerStatus').textContent = '● INACTIVE';
+      $('btJammerStatus').className = 'jammer-status';
+      $('btJammerCard').classList.remove('active-jamming');
+      addLog('jammerLog', 'BT jammer stopped', 'info');
+    } else {
+      const res = await api(CONFIG.JAMMER_BT);
+      if (res.status === 'ok' || res.success) {
+        state.btJammerActive = true;
+        $('btJammerBtn').textContent = '■ STOP BT JAMMING';
+        $('btJammerStatus').textContent = '● ACTIVE';
+        $('btJammerStatus').className = 'jammer-status active';
+        $('btJammerCard').classList.add('active-jamming');
+        addLog('jammerLog', 'BT jammer ACTIVE — flooding BLE + Classic BT!', 'warn');
+      }
+    }
+  }
+
+  // ==================== WIFI DUCK - File Upload ====================
+  function setupDuckyFileUpload() {
+    const uploadZone = $('duckyUploadZone');
+    const fileInput = $('duckyFileInput');
+    if (!uploadZone || !fileInput) return;
+
+    uploadZone.addEventListener('click', () => fileInput.click());
+
+    uploadZone.addEventListener('dragover', (e) => { e.preventDefault(); uploadZone.style.borderColor = 'var(--accent)'; });
+    uploadZone.addEventListener('dragleave', () => { uploadZone.style.borderColor = 'var(--border2)'; });
+    uploadZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      uploadZone.style.borderColor = 'var(--border2)';
+      if (e.dataTransfer.files.length > 0) handleDuckyFile(e.dataTransfer.files[0]);
+    });
+
+    fileInput.addEventListener('change', () => {
+      if (fileInput.files.length > 0) handleDuckyFile(fileInput.files[0]);
+      fileInput.value = '';
+    });
+  }
+
+  function handleDuckyFile(file) {
+    if (!file.name.toLowerCase().endsWith('.txt')) {
+      addLog('duckyLog', `ERROR: Only .txt files allowed (got: ${file.name})`, 'error');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      const content = e.target.result;
+      const preview = $('duckyFilePreview');
+      if (preview) preview.value = content;
+
+      const fileList = $('duckyFileList');
+      if (fileList) {
+        fileList.innerHTML = `
+          <div class="file-item">
+            <span class="file-icon">📜</span>
+            <span class="file-name">${file.name}</span>
+            <span class="file-size">${(file.size / 1024).toFixed(1)} KB</span>
+            <button class="btn btn-ghost btn-xs remove-file-btn">✕</button>
+          </div>
+        `;
+        fileList.querySelector('.remove-file-btn').addEventListener('click', () => {
+          fileList.innerHTML = '';
+          if (preview) preview.value = '';
+          delete $('duckyFileInjectBtn').dataset.scriptContent;
+          addLog('duckyLog', 'File removed', 'info');
+        });
+      }
+
+      $('duckyFileInjectBtn').dataset.scriptContent = content;
+      addLog('duckyLog', `Loaded: ${file.name} (${(file.size/1024).toFixed(1)} KB)`, 'success');
+    };
+    reader.readAsText(file);
+  }
+
+  async function duckyFileInject() {
+    const content = $('duckyFileInjectBtn').dataset.scriptContent;
+    if (!content || content.trim() === '') {
+      addLog('duckyLog', 'ERROR: Upload a .txt script first', 'error');
+      return;
+    }
+    addLog('duckyLog', 'Injecting from file...', 'warn');
+    const res = await api(CONFIG.DUCKY_INJECT, 'POST', { script: content });
+    if (res.status === 'ok' || res.success) {
+      addLog('duckyLog', 'Uploaded script injected!', 'success');
+      const box = $('duckyCapturedBox');
+      if (box) {
+        const time = new Date().toLocaleTimeString();
+        box.innerHTML = `<div class="captured-entry"><span class="cap-time">[${time}]</span> <span class="cap-pass">Injection complete</span></div>`;
+      }
+    } else {
+      addLog('duckyLog', `Injection failed: ${res.error || 'Unknown'}`, 'error');
+    }
+  }
+
+  // Ducky write inject
+  async function duckyWriteInject() {
+    const payload = $('duckyPayload').value.trim();
+    if (!payload) { addLog('duckyLog', 'ERROR: Write a script first', 'error'); return; }
+    addLog('duckyLog', 'Injecting written script...', 'warn');
+    const res = await api(CONFIG.DUCKY_INJECT, 'POST', { script: payload });
+    if (res.status === 'ok' || res.success) {
+      addLog('duckyLog', 'Written script injected!', 'success');
+      const box = $('duckyCapturedBox');
+      if (box) {
+        const time = new Date().toLocaleTimeString();
+        box.innerHTML = `<div class="captured-entry"><span class="cap-time">[${time}]</span> <span class="cap-pass">Injection complete</span></div>`;
+      }
+    } else addLog('duckyLog', `Injection failed: ${res.error || 'Unknown'}`, 'error');
+  }
+
+  function duckyClear() {
+    $('duckyPayload').value = '';
+    addLog('duckyLog', 'Script cleared', 'info');
+  }
+
+  function duckyClearCaptured() {
+    $('duckyCapturedBox').innerHTML = '<div class="empty-state">// no output captured yet</div>';
+  }
+
+  // Setup Ducky Mode Tabs
+  function setupDuckyModeTabs() {
+    document.querySelectorAll('.ducky-mode-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.ducky-mode-btn').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.ducky-section').forEach(s => s.style.display = 'none');
+        btn.classList.add('active');
+        const mode = btn.dataset.mode;
+        if (mode === 'write') $('duckyWriteSection').style.display = 'block';
+        else if (mode === 'file') $('duckyFileSection').style.display = 'block';
+      });
+    });
+  }
+
+  // ==================== CAPTURED DATA ====================
+  async function refreshCapturedData() {
+    const res = await api(CONFIG.CAPTURED);
+    const box = $('capturedBox');
+    if (!box) return;
+    const data = res.data || [];
+    if (data.length === 0) { box.innerHTML = '<div class="empty-state">// no data captured yet</div>'; return; }
+    box.innerHTML = data.map(d =>
+      `<div class="captured-entry"><span class="cap-time">[${d.time || '??'}]</span> <span class="cap-ssid">${escapeHtml(d.ssid)}</span> <span class="cap-pass">${escapeHtml(d.password)}</span></div>`
+    ).join('');
+  }
+
+  // ==================== TEMPLATES ====================
+  async function loadTemplates() {
+    const res = await api(CONFIG.TEMPLATES_LIST);
+    const grid = $('templateGrid');
+    if (!grid || !res.templates) return;
+    grid.innerHTML = res.templates.map((t, idx) => `
+      <div class="template-card" data-id="${t.id}">
+        <div class="template-icon">${t.has_jammer ? '🚫' : t.has_eviltwin ? '👥' : t.has_beacon ? '📶' : t.has_pmkid ? '🔑' : t.auto_chain ? '⚡' : '📡'}</div>
+        <div class="template-name">${t.name}</div>
+        <div class="template-desc">${t.description || ''}</div>
+        <div class="template-meta">
+          <span>⏱ ${t.estimated_time_sec || '?'}s</span>
+          ${t.has_deauth ? '<span class="tag tag-red">DEAUTH</span>' : ''}
+          ${t.has_pmkid ? '<span class="tag tag-blue">PMKID</span>' : ''}
+          ${t.has_jammer ? '<span class="tag tag-red">JAM</span>' : ''}
+          ${t.auto_chain ? '<span class="tag tag-green">AUTO</span>' : ''}
+        </div>
+        <button class="btn btn-primary btn-sm btn-block deploy-template-btn">▶ DEPLOY</button>
+      </div>
+    `).join('');
+    grid.querySelectorAll('.deploy-template-btn').forEach((btn, idx) => {
+      btn.addEventListener('click', () => deployTemplate(idx));
+    });
+  }
+
+  async function deployTemplate(templateId) {
+    addLog('templateLog', `Deploying template #${templateId}...`, 'warn');
+    const res = await api(CONFIG.TEMPLATES_DEPLOY, 'POST', { template_id: templateId });
+    if (res.status === 'ok' || res.success) addLog('templateLog', 'Template deployed!', 'success');
+    else addLog('templateLog', `Failed: ${res.error || 'Unknown'}`, 'error');
+  }
+
+  // ==================== TAB NAVIGATION ====================
+  document.querySelectorAll('.nav-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+      const panel = $(`panel-${btn.dataset.panel}`);
+      if (panel) panel.classList.add('active');
+    });
+  });
+
+  // ==================== EVENT BINDINGS ====================
+  $('scanBtn').addEventListener('click', runScan);
+  $('attackSelect').addEventListener('change', onAttackTypeChange);
+  $('eviltwinPhishSelect').addEventListener('change', onPhishSelectChange);
+  $('runAttackBtn').addEventListener('click', runAttack);
+  $('stopAttackBtn').addEventListener('click', stopAttack);
+  $('addSsidBtn').addEventListener('click', () => addSsidEntry());
+  $('runBeaconBtn').addEventListener('click', runBeaconSpam);
+  $('stopBeaconBtn').addEventListener('click', stopBeaconSpam);
+  $('wifiJammerBtn').addEventListener('click', toggleWifiJammer);
+  $('btJammerBtn').addEventListener('click', toggleBtJammer);
+  $('duckyInjectBtn').addEventListener('click', duckyWriteInject);
+  $('duckyClearBtn').addEventListener('click', duckyClear);
+  $('duckyFileInjectBtn').addEventListener('click', duckyFileInject);
+  $('duckyClearCaptured').addEventListener('click', duckyClearCaptured);
+
+  // ==================== INIT ====================
+
+  (async function init() {
+    state.cachedFishingFiles = await loadFishingWebFiles();
+    const list = $('ssidList');
+    const entries = list.querySelectorAll('.ssid-entry');
+    const ssidData = [];
+    entries.forEach(e => {
+      const inputs = e.querySelectorAll('input');
+      ssidData.push({ ssid: inputs[0] ? inputs[0].value : '', qty: inputs[1] ? inputs[1].value : 1 });
+    });
+    list.innerHTML = '';
+    ssidData.forEach(d => addSsidEntry(d.ssid, d.qty));
+    await loadEviltwinPhishingPages();
+    setupDuckyFileUpload();
+    setupDuckyModeTabs();
+    onAttackTypeChange();
+  })();
+
+  pollStatus();
+  setInterval(pollStatus, 10000);
+  setInterval(refreshCapturedData, 3000);
+  loadTemplates();
+
+  addLog('attackLog', 'PWN DUAL v3.0 ready — select targets and attack!', 'success');
+  addLog('beaconLog', 'Beacon spam idle. Add SSIDs and run.', 'info');
+  addLog('jammerLog', 'Jammer idle. Click to start.', 'info');
+  addLog('duckyLog', 'WiFi Duck armed. ✏️ Write script or 📁 upload .txt file.', 'info');
+
+})();
+</script>
+</body>
+</html>

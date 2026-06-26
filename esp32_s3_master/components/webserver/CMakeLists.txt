@@ -1,0 +1,15 @@
+idf_component_register(
+    SRCS
+        "webserver.c"
+    INCLUDE_DIRS
+        "."
+    REQUIRES
+        esp_http_server
+        spiffs
+        esp_timer
+        cjson
+        wifi_controller
+        wsl_bypasser
+    PRIV_REQUIRES
+        main
+)
