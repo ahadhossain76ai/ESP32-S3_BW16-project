@@ -54,29 +54,28 @@ static void beacon_spam_task(void *pv) {
     int current_instance = 0;
     
     while (g_spam_running) {
-        beacon_entry_t *entry = &g_beacon_entries[current_entry];
-        
-        // Generate BSSID
-        uint8_t bssid[6];
-        bssid[0] = 0x02;
-        for (int j = 1; j < 6; j++) bssid[j] = esp_random() & 0xFF;
-        
-        // Random channel
-        uint8_t ch = 1 + (esp_random() % 11); // Channels 1-11
-        
-        // Send beacon frame
-        wsl_bypasser_send_beacon_frame(bssid, (uint8_t*)entry->ssid, 
-                                        strlen(entry->ssid), ch);
-        total_beacons++;
-        
-        // Advance to next instance/entry
-        current_instance++;
-        if (current_instance >= entry->quantity) {
-            current_instance = 0;
-            current_entry = (current_entry + 1) % g_beacon_count;
+        for (int entry_idx = 0; entry_idx < g_beacon_count && g_spam_running; entry_idx++) {
+            beacon_entry_t *entry = &g_beacon_entries[entry_idx];
+            
+            for (int inst = 0; inst < entry->quantity && g_spam_running; inst++) {
+                // Generate unique BSSID for each instance so they appear as different APs
+                uint8_t bssid[6];
+                bssid[0] = 0x02;
+                bssid[1] = (uint8_t)(0xA0 + inst);
+                for (int j = 2; j < 6; j++) bssid[j] = esp_random() & 0xFF;
+                
+                // Random channel 1-11
+                uint8_t ch = 1 + (esp_random() % 11);
+                
+                // Send beacon frame with user's exact SSID
+                wsl_bypasser_send_beacon_frame(bssid, (uint8_t*)entry->ssid, 
+                                               strlen(entry->ssid), ch);
+                total_beacons++;
+                
+                vTaskDelay(pdMS_TO_TICKS(5)); // Small delay between instances
+            }
         }
-        
-        vTaskDelay(pdMS_TO_TICKS(10)); // ~100 beacons/sec per SSID
+        vTaskDelay(pdMS_TO_TICKS(10)); // Brief pause between full rounds
     }
     
     ESP_LOGI(TAG, "Beacon spam stopped. Total beacons: %llu", total_beacons);

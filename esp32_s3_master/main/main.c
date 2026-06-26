@@ -110,8 +110,16 @@ void app_main(void) {
             .xCoreID = 0,
         },
     };
-
     ESP_ERROR_CHECK(tinyusb_driver_install(&tusb_cfg));
+
+    // FIX: Wait for TinyUSB stack to initialize
+    vTaskDelay(pdMS_TO_TICKS(200));
+    
+    // FIX: tud_hid_init() is not needed — the callback functions in
+    // attack_ducky.c (tud_hid_descriptor_report_cb, etc.) are
+    // automatically used by TinyUSB when HID device is connected.
+    // Just ensure USB is connected to a host.
+    ESP_LOGI(TAG, "TinyUSB HID initialized — plug USB into host for WiFi Duck");
     
     // Start web server
     webserver_start();

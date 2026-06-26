@@ -31,6 +31,10 @@
 #include <dirent.h>
 #include <cJSON.h>
 
+extern int g_scan_result_count;
+extern wifi_ap_record_t *g_scan_results;
+extern bool g_scan_done;
+
 static const char *TAG = "WEBSERVER";
 static httpd_handle_t server = NULL;
 
@@ -72,6 +76,89 @@ static esp_err_t send_error(httpd_req_t *req, const char *msg) {
     cJSON *root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "error", msg);
     return send_json(req, root);
+}
+
+// ==================== API: SCAN RESULTS ====================
+
+static esp_err_t api_scan_results_handler(httpd_req_t *req) {
+    cJSON *root = cJSON_CreateObject();
+    
+    if (!g_scan_done && !ap_scanner_is_scan_complete()) {
+        cJSON_AddStringToObject(root, "status", "scanning");
+        char *json = cJSON_PrintUnformatted(root);
+        httpd_resp_set_type(req, "application/json");
+        httpd_resp_sendstr(req, json);
+        free(json);
+        cJSON_Delete(root);
+        return ESP_OK;
+    }
+
+    cJSON *networks = cJSON_AddArrayToObject(root, "networks");
+    
+    // Use ap_scanner results if available, else fallback to g_scan_results
+    wifi_ap_record_t *records = NULL;
+    int count = 0;
+    
+    if (ap_scanner_get_count() > 0) {
+        records = ap_scanner_get_results();
+        count = ap_scanner_get_count();
+    } else if (g_scan_result_count > 0) {
+        records = g_scan_results;
+        count = g_scan_result_count;
+    }
+    
+    for (int i = 0; i < count && records; i++) {
+        char bssid_str[18];
+        snprintf(bssid_str, 18, "%02X:%02X:%02X:%02X:%02X:%02X",
+                 records[i].bssid[0], records[i].bssid[1], records[i].bssid[2],
+                 records[i].bssid[3], records[i].bssid[4], records[i].bssid[5]);
+        
+        cJSON *net = cJSON_CreateObject();
+        cJSON_AddStringToObject(net, "ssid", (char*)records[i].ssid);
+        cJSON_AddStringToObject(net, "bssid", bssid_str);
+        cJSON_AddNumberToObject(net, "channel", records[i].primary);
+        cJSON_AddNumberToObject(net, "rssi", records[i].rssi);
+        cJSON_AddBoolToObject(net, "is_5ghz", false);
+        
+        const char *auth = "UNKNOWN";
+        switch (records[i].authmode) {
+            case WIFI_AUTH_OPEN: auth = "OPEN"; break;
+            case WIFI_AUTH_WEP: auth = "WEP"; break;
+            case WIFI_AUTH_WPA_PSK: auth = "WPA"; break;
+            case WIFI_AUTH_WPA2_PSK: auth = "WPA2"; break;
+            case WIFI_AUTH_WPA_WPA2_PSK: auth = "WPA/WPA2"; break;
+            case WIFI_AUTH_WPA3_PSK: auth = "WPA3"; break;
+        }
+        cJSON_AddStringToObject(net, "auth", auth);
+        cJSON_AddItemToArray(networks, net);
+    }
+    
+    cJSON_AddNumberToObject(root, "count", count);
+    cJSON_AddBoolToObject(root, "scan_done", g_scan_done || ap_scanner_is_scan_complete());
+    cJSON_AddBoolToObject(root, "bw16_connected", bw16_is_connected());
+    
+    char *json = cJSON_PrintUnformatted(root);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, json);
+    free(json);
+    cJSON_Delete(root);
+    return ESP_OK;
+}
+
+static esp_err_t api_scan_status_handler(httpd_req_t *req) {
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddBoolToObject(root, "scan_done", g_scan_done || ap_scanner_is_scan_complete());
+    cJSON_AddBoolToObject(root, "scanning", attack_is_scanning());
+    cJSON_AddNumberToObject(root, "count", 
+        ap_scanner_get_count() > 0 ? ap_scanner_get_count() : g_scan_result_count);
+    cJSON_AddBoolToObject(root, "bw16_connected", bw16_is_connected());
+    
+    char *json = cJSON_PrintUnformatted(root);
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, json);
+    free(json);
+    cJSON_Delete(root);
+    return ESP_OK;
 }
 
 static esp_err_t send_status(httpd_req_t *req, const char *msg) {
@@ -514,68 +601,102 @@ static esp_err_t serve_fishing_page_handler(httpd_req_t *req) {
 
 // ==================== BEACON START ====================
 static esp_err_t api_beacon_start_handler(httpd_req_t *req) {
-    size_t len = req->content_len;
-    if (len <= 0) return send_error(req, "No data");
-    
-    char *buf = malloc(len + 1);
-    if (!buf) return send_error(req, "Memory error");
-    httpd_req_recv(req, buf, len);
+    char buf[4096];
+    int len = httpd_req_recv(req, buf, sizeof(buf) - 1);
+    if (len <= 0) {
+        cJSON *e = cJSON_CreateObject();
+        cJSON_AddStringToObject(e, "error", "No data received");
+        return send_json(req, e, 400);
+    }
     buf[len] = '\0';
     
-    cJSON *root = cJSON_Parse(buf);
-    free(buf);
-    if (!root) return send_error(req, "Invalid JSON");
+    ESP_LOGI(TAG, "Beacon spam POST data: %s", buf);
     
-    cJSON *ssids_json = cJSON_GetObjectItem(root, "ssids");
-    cJSON *quantities_json = cJSON_GetObjectItem(root, "quantities");
-    cJSON *fishing_json = cJSON_GetObjectItem(root, "fishing_pages");
-    
-    if (!cJSON_IsArray(ssids_json)) {
-        cJSON_Delete(root);
-        return send_error(req, "SSIDs array required");
+    cJSON *json = cJSON_Parse(buf);
+    if (!json) {
+        cJSON *e = cJSON_CreateObject();
+        cJSON_AddStringToObject(e, "error", "Invalid JSON");
+        return send_json(req, e, 400);
     }
     
-    int count = cJSON_GetArraySize(ssids_json);
-    if (count > 50) count = 50;
+    cJSON *ssids_arr = cJSON_GetObjectItem(json, "ssids");
+    if (!ssids_arr || !cJSON_IsArray(ssids_arr)) {
+        cJSON_Delete(json);
+        cJSON *e = cJSON_CreateObject();
+        cJSON_AddStringToObject(e, "error", "Missing ssids array");
+        return send_json(req, e, 400);
+    }
     
+    int count = cJSON_GetArraySize(ssids_arr);
+    if (count > 20) count = 20;
+    
+    // Allocate arrays
     const char **ssids = calloc(count, sizeof(char*));
     int *quantities = calloc(count, sizeof(int));
     const char **fishing = calloc(count, sizeof(char*));
     
+    if (!ssids || !quantities || !fishing) {
+        free((void*)ssids); free(quantities); free((void*)fishing);
+        cJSON_Delete(json);
+        cJSON *e = cJSON_CreateObject();
+        cJSON_AddStringToObject(e, "error", "Memory allocation failed");
+        return send_json(req, e, 500);
+    }
+    
+    int valid_count = 0;
     for (int i = 0; i < count; i++) {
-        cJSON *s = cJSON_GetArrayItem(ssids_json, i);
-        ssids[i] = s && cJSON_IsString(s) ? strdup(s->valuestring) : strdup("Unknown");
+        cJSON *item = cJSON_GetArrayItem(ssids_arr, i);
+        if (!item) continue;
         
-        if (quantities_json && cJSON_IsArray(quantities_json)) {
-            cJSON *q = cJSON_GetArrayItem(quantities_json, i);
-            quantities[i] = q && cJSON_IsNumber(q) ? q->valueint : 1;
-        } else {
-            quantities[i] = 1;
-        }
+        cJSON *ssid_j = cJSON_GetObjectItem(item, "ssid");
+        cJSON *qty_j = cJSON_GetObjectItem(item, "quantity");
+        cJSON *fish_j = cJSON_GetObjectItem(item, "fishing_page");
         
-        if (fishing_json && cJSON_IsArray(fishing_json)) {
-            cJSON *f = cJSON_GetArrayItem(fishing_json, i);
-            fishing[i] = f && cJSON_IsString(f) ? strdup(f->valuestring) : NULL;
-        } else {
-            fishing[i] = NULL;
+        if (ssid_j && cJSON_IsString(ssid_j) && strlen(cJSON_GetStringValue(ssid_j)) > 0) {
+            ssids[valid_count] = strdup(cJSON_GetStringValue(ssid_j));
+            quantities[valid_count] = (qty_j && cJSON_IsNumber(qty_j)) ? 
+                                       (int)cJSON_GetNumberValue(qty_j) : 1;
+            if (quantities[valid_count] < 1) quantities[valid_count] = 1;
+            if (quantities[valid_count] > 20) quantities[valid_count] = 20;
+            
+            fishing[valid_count] = (fish_j && cJSON_IsString(fish_j) && 
+                                    strlen(cJSON_GetStringValue(fish_j)) > 0) ? 
+                                    strdup(cJSON_GetStringValue(fish_j)) : "";
+            
+            ESP_LOGI(TAG, "SSID[%d]: '%s' qty=%d fishing='%s'", 
+                     valid_count, ssids[valid_count], quantities[valid_count], fishing[valid_count]);
+            valid_count++;
         }
     }
     
-    cJSON_Delete(root);
-    
-    beacon_spam_start(ssids, quantities, fishing, count);
-    
-    for (int i = 0; i < count; i++) {
-        free((void*)ssids[i]);
-        if (fishing[i]) free((void*)fishing[i]);
+    if (valid_count == 0) {
+        for (int i = 0; i < count; i++) {
+            if (ssids[i]) free((void*)ssids[i]);
+            if (fishing[i] && fishing[i] != (const char*)1 && strlen(fishing[i]) > 0) 
+                free((void*)fishing[i]);
+        }
+        free((void*)ssids); free(quantities); free((void*)fishing);
+        cJSON_Delete(json);
+        cJSON *e = cJSON_CreateObject();
+        cJSON_AddStringToObject(e, "error", "No valid SSIDs provided");
+        return send_json(req, e, 400);
     }
-    free(ssids);
-    free(quantities);
-    free(fishing);
     
-    char msg[64];
-    snprintf(msg, sizeof(msg), "Beacon spam: %d SSIDs", count);
-    return send_status(req, msg);
+    beacon_spam_start(ssids, quantities, fishing, valid_count);
+    
+    // Cleanup
+    for (int i = 0; i < valid_count; i++) {
+        if (ssids[i]) free((void*)ssids[i]);
+        if (fishing[i] && fishing[i] != (const char*)1 && strlen(fishing[i]) > 0) 
+            free((void*)fishing[i]);
+    }
+    free((void*)ssids); free(quantities); free((void*)fishing);
+    cJSON_Delete(json);
+    
+    cJSON *resp = cJSON_CreateObject();
+    cJSON_AddStringToObject(resp, "status", "started");
+    cJSON_AddNumberToObject(resp, "ssid_count", valid_count);
+    return send_json(req, resp, 200);
 }
 
 static esp_err_t api_beacon_stop_handler(httpd_req_t *req) {
@@ -601,31 +722,45 @@ static esp_err_t api_jammer_stop_handler(httpd_req_t *req) {
 
 // ==================== WIFI DUCK ====================
 static esp_err_t api_ducky_inject_handler(httpd_req_t *req) {
-    size_t len = req->content_len;
-    if (len <= 0) return send_error(req, "No script data");
+    char buf[8192];
+    int len = httpd_req_recv(req, buf, sizeof(buf) - 1);
+    if (len <= 0) {
+        cJSON *e = cJSON_CreateObject();
+        cJSON_AddStringToObject(e, "error", "No data received");
+        return send_json(req, e, 400);
+    }
+    buf[len] = '\0';
     
-    char *script = malloc(len + 1);
-    if (!script) return send_error(req, "Memory error");
-    httpd_req_recv(req, script, len);
-    script[len] = '\0';
+    ESP_LOGI(TAG, "Ducky inject: %d bytes received", len);
     
-    cJSON *json = cJSON_Parse(script);
-    const char *payload = script;
-    if (json) {
-        cJSON *s = cJSON_GetObjectItem(json, "script");
-        if (s && cJSON_IsString(s)) payload = s->valuestring;
+    cJSON *json = cJSON_Parse(buf);
+    if (!json) {
+        cJSON *e = cJSON_CreateObject();
+        cJSON_AddStringToObject(e, "error", "Invalid JSON");
+        return send_json(req, e, 400);
     }
     
-    int result = ducky_inject(payload);
+    cJSON *script_j = cJSON_GetObjectItem(json, "script");
+    if (!script_j || !cJSON_IsString(script_j)) {
+        cJSON_Delete(json);
+        cJSON *e = cJSON_CreateObject();
+        cJSON_AddStringToObject(e, "error", "Missing 'script' field");
+        return send_json(req, e, 400);
+    }
     
-    if (json) cJSON_Delete(json);
-    else free(script);
+    const char *script = cJSON_GetStringValue(script_j);
+    int result = ducky_inject(script);
+    cJSON_Delete(json);
     
+    cJSON *resp = cJSON_CreateObject();
     if (result == 0) {
-        return send_status(req, "Ducky script injected");
+        cJSON_AddStringToObject(resp, "status", "injected");
+        cJSON_AddStringToObject(resp, "message", "Script injection successful");
     } else {
-        return send_error(req, "Injection failed");
+        cJSON_AddStringToObject(resp, "status", "failed");
+        cJSON_AddStringToObject(resp, "error", "Injection failed. Check USB connection.");
     }
+    return send_json(req, resp, 200);
 }
 
 static esp_err_t api_ducky_stop_handler(httpd_req_t *req) {
@@ -1041,6 +1176,20 @@ void register_all_api_handlers(httpd_handle_t server) {
     httpd_register_uri_handler(server, &(httpd_uri_t){
         .uri = "/api/scan/stop", .method = HTTP_GET,
         .handler = api_scan_stop_handler, .user_ctx = NULL
+    });
+
+    // ===== SCAN RESULTS =====
+    httpd_register_uri_handler(server, &(httpd_uri_t){
+        .uri = "/api/scan/results",
+        .method = HTTP_GET,
+        .handler = api_scan_results_handler,
+        .user_ctx = NULL
+    });
+    httpd_register_uri_handler(server, &(httpd_uri_t){
+        .uri = "/api/scan/status",
+        .method = HTTP_GET,
+        .handler = api_scan_status_handler,
+        .user_ctx = NULL
     });
 
     // ===== DEAUTH =====

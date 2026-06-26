@@ -1,8 +1,8 @@
 #ifndef ATTACK_JAMMER_H
 #define ATTACK_JAMMER_H
 
-#include <stdbool.h>
 #include <stdint.h>
+#include <stdbool.h>
 
 void jammer_wifi_start(void);
 void jammer_bt_start(void);

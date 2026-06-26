@@ -98,22 +98,48 @@ void bt_jammer_start(void) {
     if (bt_jammer_running) return;
     
     esp_bt_controller_status_t bt_status = esp_bt_controller_get_status();
+    
     if (bt_status == ESP_BT_CONTROLLER_STATUS_IDLE) {
         ESP_LOGI(TAG, "Initializing BT controller for BLE jammer...");
         
-        // ESP32-S3: BT_CONTROLLER_INIT_CONFIG_DEFAULT() is a macro that
-        // expands to { ... } initializer. Must use at declaration, NOT as assignment.
         esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
         
-        ESP_ERROR_CHECK(esp_bt_controller_init(&bt_cfg));
+        esp_err_t ret;
+        ret = esp_bt_controller_init(&bt_cfg);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "BT controller init failed: %s", esp_err_to_name(ret));
+            return;  // FIX: crash না হয়ে return করবে
+        }
         
-        // Use BLE-only mode (Classic BT is NOT enabled on S3 with this config)
-        // Classic BT code is preserved as dead code (#if 0) above for reference
-        ESP_ERROR_CHECK(esp_bt_controller_enable(ESP_BT_MODE_BLE));
-        ESP_ERROR_CHECK(esp_bluedroid_init());
-        ESP_ERROR_CHECK(esp_bluedroid_enable());
+        ret = esp_bt_controller_enable(ESP_BT_MODE_BLE);
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "BT controller enable failed: %s", esp_err_to_name(ret));
+            esp_bt_controller_deinit();
+            return;
+        }
         
-        ESP_LOGI(TAG, "BT controller initialized for BLE jammer (Classic BT: disabled/dead code)");
+        ret = esp_bluedroid_init();
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Bluedroid init failed: %s", esp_err_to_name(ret));
+            esp_bt_controller_disable();
+            esp_bt_controller_deinit();
+            return;
+        }
+        
+        ret = esp_bluedroid_enable();
+        if (ret != ESP_OK) {
+            ESP_LOGE(TAG, "Bluedroid enable failed: %s", esp_err_to_name(ret));
+            esp_bluedroid_deinit();
+            esp_bt_controller_disable();
+            esp_bt_controller_deinit();
+            return;
+        }
+        
+        ESP_LOGI(TAG, "BT controller initialized OK for BLE jammer");
+    } else if (bt_status == ESP_BT_CONTROLLER_STATUS_ENABLED) {
+        ESP_LOGI(TAG, "BT already enabled — reusing");
+    } else {
+        ESP_LOGW(TAG, "BT status = %d — may not work properly", bt_status);
     }
     
     xTaskCreatePinnedToCore(bt_jammer_task_func, "bt_jammer", 4096, NULL, 5, &bt_jammer_task, 1);

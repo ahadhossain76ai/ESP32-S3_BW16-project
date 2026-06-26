@@ -219,26 +219,42 @@ void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
 // ==================== PUBLIC API ====================
 
 int ducky_inject(const char *script) {
-    if (!script || !*script) return -1;
+    if (!script || !*script) {
+        ESP_LOGE(TAG, "Empty or NULL script");
+        return -1;
+    }
     
     g_ducky_running = true;
-    ESP_LOGI(TAG, "Ducky injection STARTED");
+    ESP_LOGI(TAG, "Ducky injection STARTED (script length: %d bytes)", strlen(script));
     
     char *copy = strdup(script);
-    if (!copy) { g_ducky_running = false; return -1; }
+    if (!copy) {
+        g_ducky_running = false;
+        return -1;
+    }
     
     char *saveptr;
     char *line = strtok_r(copy, "\n\r", &saveptr);
+    int line_count = 0;
+    
     while (line && g_ducky_running) {
+        // Trim leading whitespace
         while (*line == ' ' || *line == '\t') line++;
-        if (*line && *line != ';' && *line != '#') execute_line(line);
+        
+        // Skip empty lines and comments
+        if (*line && *line != ';' && *line != '#') {
+            execute_line(line);
+            line_count++;
+        }
+        
         line = strtok_r(NULL, "\n\r", &saveptr);
     }
     
     free(copy);
     g_ducky_running = false;
-    ESP_LOGI(TAG, "Ducky injection COMPLETE");
-    return 0;
+    
+    ESP_LOGI(TAG, "Ducky injection COMPLETE - %d lines executed", line_count);
+    return line_count > 0 ? 0 : -1;
 }
 
 void ducky_stop(void) {
