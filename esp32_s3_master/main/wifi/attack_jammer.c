@@ -51,7 +51,8 @@ static void jammer_wifi_func(void *params) {
     uint8_t bssid[6] = {0x02, 0x00, 0x00, 0x00, 0x00, 0x00};
     int ch = 1;
 
-    if (bw16_is_connected()) bw16_jammer_start();{
+    if (bw16_is_connected()) {
+        bw16_jammer_start();
         bw16_send_command("JAMMER:START\n");
     }
 
