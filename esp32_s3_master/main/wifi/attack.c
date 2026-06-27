@@ -185,7 +185,7 @@ void attack_scan_done_handler(void *arg, esp_event_base_t base,
 
     if (g_scan_sem) xSemaphoreGive(g_scan_sem);
 
-    ESP_LOGI(TAG, "Scan done: %d APs found", count);
+    ESP_LOGI(TAG, "Scan done: %d APs found (g_scan_done set to true)", g_scan_result_count);
 }
 
 void attack_init(void)
@@ -196,6 +196,9 @@ void attack_init(void)
     esp_event_handler_instance_register(
         WIFI_EVENT, WIFI_EVENT_SCAN_DONE,
         attack_scan_done_handler, NULL, NULL);
+    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_SCAN_DONE, 
+                                                &attack_scan_done_handler, NULL));
+    
     ESP_LOGI(TAG, "Attack engine initialized");
 }
 

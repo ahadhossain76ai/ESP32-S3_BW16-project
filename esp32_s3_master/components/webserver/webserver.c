@@ -184,18 +184,25 @@ static esp_err_t api_scan_results_handler(httpd_req_t *req) {
 
 static esp_err_t api_scan_status_handler(httpd_req_t *req) {
     cJSON *root = cJSON_CreateObject();
-    cJSON_AddBoolToObject(root, "scan_done", g_scan_done || ap_scanner_is_scan_complete());
-    cJSON_AddBoolToObject(root, "scanning", attack_is_scanning());
-    cJSON_AddNumberToObject(root, "count", 
-        ap_scanner_get_count() > 0 ? ap_scanner_get_count() : g_scan_result_count);
-    cJSON_AddBoolToObject(root, "bw16_connected", bw16_is_connected());
     
-    char *json = cJSON_PrintUnformatted(root);
-    httpd_resp_set_type(req, "application/json");
-    httpd_resp_sendstr(req, json);
-    free(json);
-    cJSON_Delete(root);
-    return ESP_OK;
+    if (g_scanning) {
+        cJSON_AddStringToObject(root, "status", "scanning");
+    } else if (g_scan_done && g_scan_results && g_scan_result_count > 0) {
+        cJSON_AddStringToObject(root, "status", "done");
+        cJSON_AddNumberToObject(root, "count", g_scan_result_count);
+        cJSON *aps = cJSON_AddArrayToObject(root, "aps");
+        for (int i = 0; i < g_scan_result_count; i++) {
+            cJSON *ap = cJSON_CreateObject();
+            cJSON_AddStringToObject(ap, "ssid", (char *)g_scan_results[i].ssid);
+            cJSON_AddNumberToObject(ap, "rssi", g_scan_results[i].rssi);
+            cJSON_AddNumberToObject(ap, "channel", g_scan_results[i].primary);
+            cJSON_AddItemToArray(aps, ap);
+        }
+    } else {
+        cJSON_AddStringToObject(root, "status", "idle");
+    }
+    
+    return send_json(req, root);
 }
 
 static esp_err_t send_status(httpd_req_t *req, const char *msg) {
@@ -637,31 +644,39 @@ static esp_err_t serve_fishing_page_handler(httpd_req_t *req) {
 }
 
 // ==================== BEACON START ====================
-static esp_err_t api_beacon_start_handler(httpd_req_t *req) {
-    char buf[4096];
-    int len = httpd_req_recv(req, buf, sizeof(buf) - 1);
-    if (len <= 0) {
-        cJSON *e = cJSON_CreateObject();
-        cJSON_AddStringToObject(e, "error", "No data received");
-        return send_json(req, e, 400);
+static esp_err_t api_beacon_start_handler(httpd_req_t *req)
+{
+    char buf[MAX_SCRATCH_BUF];
+    int ret = httpd_req_recv(req, buf, sizeof(buf) - 1);
+    if (ret <= 0) {
+        if (ret == HTTPD_SOCK_ERR_TIMEOUT) {
+            httpd_resp_send_408(req);
+        }
+        return ESP_FAIL;
     }
-    buf[len] = '\0';
-    
-    ESP_LOGI(TAG, "Beacon spam POST data: %s", buf);
-    
-    cJSON *json = cJSON_Parse(buf);
-    if (!json) {
-        cJSON *e = cJSON_CreateObject();
-        cJSON_AddStringToObject(e, "error", "Invalid JSON");
-        return send_json(req, e, 400);
+    buf[ret] = '\0';
+
+    // NULL/খালি বডি চেক
+    if (strlen(buf) == 0) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Empty body");
+        return ESP_FAIL;
     }
-    
-    cJSON *ssids_arr = cJSON_GetObjectItem(json, "ssids");
-    if (!ssids_arr || !cJSON_IsArray(ssids_arr)) {
-        cJSON_Delete(json);
-        cJSON *e = cJSON_CreateObject();
-        cJSON_AddStringToObject(e, "error", "Missing ssids array");
-        return send_json(req, e, 400);
+
+    cJSON *root = cJSON_Parse(buf);
+    if (!root) {
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid JSON");
+        return ESP_FAIL;
+    }
+
+    cJSON *ssids = cJSON_GetObjectItem(root, "ssids");
+    cJSON *quantities = cJSON_GetObjectItem(root, "quantities");
+    cJSON *fishing_pages = cJSON_GetObjectItem(root, "fishing_pages");
+
+    // NULL চেক
+    if (!cJSON_IsArray(ssids)) {
+        cJSON_Delete(root);
+        httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "ssids must be an array");
+        return ESP_FAIL;
     }
     
     int count = cJSON_GetArraySize(ssids_arr);
