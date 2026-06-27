@@ -54,12 +54,25 @@ static void mount_spiffs(void) {
         return;
     }
     
+    ESP_LOGI(TAG, "Initializing SPIFFS...");
+    esp_vfs_spiffs_conf_t conf = {
+        .base_path = "/spiffs",
+        .partition_label = NULL,
+        .max_files = 5,
+        .format_if_mount_failed = true
+    };
+    ret = esp_vfs_spiffs_register(&conf);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "SPIFFS mount failed (%s)", esp_err_to_name(ret));
+        // handle error
+    }
+
     size_t total = 0, used = 0;
     ret = esp_spiffs_info(NULL, &total, &used);
-    if (ret != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to get SPIFFS partition info (%s)", esp_err_to_name(ret));
+    if (ret == ESP_OK) {
+        ESP_LOGI(TAG, "SPIFFS: %d KB total, %d KB used", total / 1024, used / 1024);
     } else {
-        ESP_LOGI(TAG, "SPIFFS mounted: %d KB total, %d KB used", total / 1024, used / 1024);
+        ESP_LOGE(TAG, "Failed to get SPIFFS partition info (%s)", esp_err_to_name(ret));
     }
 }
 
@@ -147,4 +160,26 @@ void app_main(void) {
     
     // Success indicator
     hw_success_alert();
+}
+
+// main.c-এ BW16 init-এ baud scan যোগ করতে পারো:
+static bool bw16_detect_at_baud(int baud) {
+    uart_set_baudrate(UART_NUM_2, baud);
+    vTaskDelay(pdMS_TO_TICKS(100));
+    uart_write_bytes(UART_NUM_2, "AT\r\n", 4);
+    uint8_t buf[32];
+    int len = uart_read_bytes(UART_NUM_2, buf, sizeof(buf) - 1, pdMS_TO_TICKS(500));
+    buf[len] = 0;
+    return (len > 0 && strstr((char*)buf, "OK") != NULL);
+}
+
+// Try multiple baud rates
+int baud_rates[] = {115200, 921600, 9600, 57600, 230400};
+bool bw16_found = false;
+for (int i = 0; i < sizeof(baud_rates)/sizeof(baud_rates[0]); i++) {
+    if (bw16_detect_at_baud(baud_rates[i])) {
+        ESP_LOGI(TAG, "✅ BW16 detected at %d baud", baud_rates[i]);
+        bw16_found = true;
+        break;
+    }
 }
