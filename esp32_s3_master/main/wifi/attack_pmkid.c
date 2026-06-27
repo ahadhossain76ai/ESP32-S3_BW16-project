@@ -41,6 +41,8 @@ static const uint8_t __attribute__((unused)) g_channels_5ghz[] = {
 };
 #define NUM_5GHZ_CHANNELS (sizeof(g_channels_5ghz) / sizeof(g_channels_5ghz[0]))
 
+static void pmkid_auto_scan_task(void *pv);
+
 // 2.4GHz channel list
 static const uint8_t __attribute__((unused)) g_channels_24ghz[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13};
 #define NUM_24GHZ_CHANNELS (sizeof(g_channels_24ghz) / sizeof(g_channels_24ghz[0]))
@@ -340,6 +342,49 @@ void pmkid_capture_stop(void) {
     ESP_LOGI(TAG, "PMKID capture stopped. Total captured: %d", g_pmkid_count);
 }
 
+// ==================== AUTO SCAN TASK ====================
+static void pmkid_auto_scan_task(void *pv) {
+    ESP_LOGI(TAG, "PMKID auto-scan started — cycling all channels");
+
+    g_pmkid_auto_scan = true;
+    g_pmkid_running = true;
+    
+    esp_wifi_set_promiscuous_rx_cb(pmkid_promiscuous_cb);
+    esp_wifi_set_promiscuous(true);
+    
+    int round = 0;
+    while (g_pmkid_auto_scan && g_pmkid_running) {
+        round++;
+        
+        // Scan 2.4GHz channels first
+        for (int i = 0; i < NUM_24GHZ_CHANNELS && g_pmkid_auto_scan; i++) {
+            if (!g_pmkid_running) break;
+            
+            uint8_t ch = g_channels_24ghz[i];
+            esp_wifi_set_channel(ch, WIFI_SECOND_CHAN_NONE);
+            
+            // Send deauth on this channel to provoke handshake
+            // (brodcast deauth to trigger client reconnection)
+            uint8_t broadcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+            
+            // Small dwell time on each channel
+            vTaskDelay(pdMS_TO_TICKS(200));
+        }
+        
+        // Log progress
+        ESP_LOGI(TAG, "PMKID auto-scan round %d: %d captures so far, %lu packets analyzed",
+                 round, g_pmkid_count, (unsigned long)g_packet_count);
+        
+        // Brief pause between full cycles
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    
+    ESP_LOGI(TAG, "PMKID auto-scan stopped. Total captures: %d", g_pmkid_count);
+    g_pmkid_running = false;
+    g_pmkid_task = NULL;
+    vTaskDelete(NULL);
+}
+
 void pmkid_capture_auto_scan(void) {
     if (g_pmkid_running) {
         pmkid_capture_stop();
@@ -418,49 +463,6 @@ char* pmkid_capture_export_json(void) {
     char *json = cJSON_Print(root);
     cJSON_Delete(root);
     return json;
-}
-
-// ==================== AUTO SCAN TASK ====================
-static void pmkid_auto_scan_task(void *pv) {
-    ESP_LOGI(TAG, "PMKID auto-scan started — cycling all channels");
-
-    g_pmkid_auto_scan = true;
-    g_pmkid_running = true;
-    
-    esp_wifi_set_promiscuous_rx_cb(pmkid_promiscuous_cb);
-    esp_wifi_set_promiscuous(true);
-    
-    int round = 0;
-    while (g_pmkid_auto_scan && g_pmkid_running) {
-        round++;
-        
-        // Scan 2.4GHz channels first
-        for (int i = 0; i < NUM_24GHZ_CHANNELS && g_pmkid_auto_scan; i++) {
-            if (!g_pmkid_running) break;
-            
-            uint8_t ch = g_channels_24ghz[i];
-            esp_wifi_set_channel(ch, WIFI_SECOND_CHAN_NONE);
-            
-            // Send deauth on this channel to provoke handshake
-            // (brodcast deauth to trigger client reconnection)
-            uint8_t broadcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
-            
-            // Small dwell time on each channel
-            vTaskDelay(pdMS_TO_TICKS(200));
-        }
-        
-        // Log progress
-        ESP_LOGI(TAG, "PMKID auto-scan round %d: %d captures so far, %lu packets analyzed",
-                 round, g_pmkid_count, (unsigned long)g_packet_count);
-        
-        // Brief pause between full cycles
-        vTaskDelay(pdMS_TO_TICKS(100));
-    }
-    
-    ESP_LOGI(TAG, "PMKID auto-scan stopped. Total captures: %d", g_pmkid_count);
-    g_pmkid_running = false;
-    g_pmkid_task = NULL;
-    vTaskDelete(NULL);
 }
 
 bool pmkid_capture_is_running(void) {
