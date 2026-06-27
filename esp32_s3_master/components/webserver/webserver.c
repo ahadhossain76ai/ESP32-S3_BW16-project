@@ -58,7 +58,7 @@ void set_active_phishing_page(const char *path) {
 
 // ==================== HELPER FUNCTIONS ====================
 
-static esp_err_t send_json(httpd_req_t *req, cJSON *root) {
+static esp_err_t send_json(httpd_req_t *req, cJSON *root, int status_code) {
     char *str = cJSON_Print(root);
     if (!str) {
         cJSON_Delete(root);
@@ -66,6 +66,10 @@ static esp_err_t send_json(httpd_req_t *req, cJSON *root) {
         return ESP_FAIL;
     }
     httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_status(req, 
+        status_code == 200 ? "200 OK" :
+        status_code == 400 ? "400 Bad Request" :
+        status_code == 500 ? "500 Internal Server Error" : "200 OK");
     httpd_resp_sendstr(req, str);
     free(str);
     cJSON_Delete(root);
@@ -75,7 +79,7 @@ static esp_err_t send_json(httpd_req_t *req, cJSON *root) {
 static esp_err_t send_error(httpd_req_t *req, const char *msg) {
     cJSON *root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "error", msg);
-    return send_json(req, root);
+    return send_json(req, root, 400);
 }
 
 // ==================== API: SCAN RESULTS ====================
@@ -128,6 +132,39 @@ static esp_err_t api_scan_results_handler(httpd_req_t *req) {
             case WIFI_AUTH_WPA2_PSK: auth = "WPA2"; break;
             case WIFI_AUTH_WPA_WPA2_PSK: auth = "WPA/WPA2"; break;
             case WIFI_AUTH_WPA3_PSK: auth = "WPA3"; break;
+            case WIFI_AUTH_ENTERPRISE:      /* includes WIFI_AUTH_WPA2_ENTERPRISE (same value) */
+            case WIFI_AUTH_WPA_ENTERPRISE:
+                auth = "ENTERPRISE";
+                break;
+            case WIFI_AUTH_WPA2_WPA3_PSK:
+                auth = "WPA2_WPA3_PSK";
+                break;
+            case WIFI_AUTH_WAPI_PSK:
+                auth = "WAPI_PSK";
+                break;
+            case WIFI_AUTH_OWE:
+                auth = "OWE";
+                break;
+            case WIFI_AUTH_WPA3_ENT_192:
+                auth = "WPA3_ENT_192";
+                break;
+            case WIFI_AUTH_WPA3_EXT_PSK:
+                auth = "WPA3_EXT_PSK";
+                break;
+            case WIFI_AUTH_WPA3_EXT_PSK_MIXED_MODE:
+                auth = "WPA3_EXT_PSK_MIXED_MODE";
+                break;
+            case WIFI_AUTH_DUMMY1:
+            case WIFI_AUTH_DUMMY2:
+            case WIFI_AUTH_DUMMY3:
+                auth = "DUMMY";
+                break;
+            case WIFI_AUTH_MAX:
+                auth = "MAX";
+                break;
+            default:
+                auth = "UNKNOWN";
+                break;
         }
         cJSON_AddStringToObject(net, "auth", auth);
         cJSON_AddItemToArray(networks, net);
@@ -164,7 +201,7 @@ static esp_err_t api_scan_status_handler(httpd_req_t *req) {
 static esp_err_t send_status(httpd_req_t *req, const char *msg) {
     cJSON *root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "status", msg);
-    return send_json(req, root);
+    return send_json(req, root, 200);
 }
 
 // Extract query parameter value
@@ -229,7 +266,7 @@ static esp_err_t api_status_handler(httpd_req_t *req) {
     snprintf(uptime, sizeof(uptime), "%llum %llus", uptime_ms/60000, (uptime_ms/1000)%60);
     cJSON_AddStringToObject(root, "uptime", uptime);
     
-    return send_json(req, root);
+    return send_json(req, root, 200);
 }
 
 // ==================== SCAN API ====================
@@ -283,7 +320,7 @@ static esp_err_t api_scan_all_handler(httpd_req_t *req) {
     cJSON_AddItemToArray(networks_5, n_5);
     
     cJSON_AddNumberToObject(root, "count", cJSON_GetArraySize(networks_24) + cJSON_GetArraySize(networks_5));
-    return send_json(req, root);
+    return send_json(req, root, 200);
 }
 
 static esp_err_t api_scan_stop_handler(httpd_req_t *req) {
@@ -337,7 +374,7 @@ static esp_err_t api_scan_handler(httpd_req_t *req) {
             cJSON_AddNumberToObject(n, "rssi", records[i].rssi);
             cJSON_AddItemToArray(nets, n);
         }
-        return send_json(req, root);
+        return send_json(req, root, 200);
     }
     
     free(type);
@@ -379,7 +416,7 @@ static esp_err_t api_scan_handler(httpd_req_t *req) {
             }
             free(records);
             cJSON_AddNumberToObject(root, "count", count);
-            return send_json(req, root);
+            return send_json(req, root, 200);
         }
         free(records);
     }
@@ -847,7 +884,7 @@ static esp_err_t api_chain_status_handler(httpd_req_t *req) {
         cJSON_AddStringToObject(root, "last_pmkid", status->last_pmkid);
     }
     
-    return send_json(req, root);
+    return send_json(req, root, 200);
 }
 
 // ==================== TEMPLATES ====================
@@ -912,7 +949,7 @@ static esp_err_t api_files_list_handler(httpd_req_t *req) {
     }
     closedir(dir);
     
-    return send_json(req, root);
+    return send_json(req, root, 200);
 }
 
 static esp_err_t api_files_read_handler(httpd_req_t *req) {
@@ -950,7 +987,7 @@ static esp_err_t api_files_read_handler(httpd_req_t *req) {
     
     free(content);
     free(filename);
-    return send_json(req, root);
+    return send_json(req, root, 200);
 }
 
 static esp_err_t api_files_upload_handler(httpd_req_t *req) {
@@ -1062,7 +1099,7 @@ static esp_err_t api_captured_handler(httpd_req_t *req) {
     }
     
     cJSON_AddNumberToObject(root, "count", count);
-    return send_json(req, root);
+    return send_json(req, root, 200);
 }
 
 static esp_err_t api_captured_clear_handler(httpd_req_t *req) {
@@ -1075,7 +1112,7 @@ static esp_err_t api_console_handler(httpd_req_t *req) {
     cJSON *root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "status", "ok");
     cJSON_AddStringToObject(root, "message", "Console monitoring active");
-    return send_json(req, root);
+    return send_json(req, root, 200);
 }
 
 // ==================== STATIC FILE SERVER ====================
@@ -1143,7 +1180,7 @@ void webserver_start(void) {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.server_port = 80;
     config.lru_purge_enable = true;
-    config.max_uri_handlers = 35;  // Increased for new handlers
+    config.max_uri_handlers = 50;  // Increased for new handlers
     config.uri_match_fn = httpd_uri_match_wildcard;
     
     if (httpd_start(&server, &config) != ESP_OK) {

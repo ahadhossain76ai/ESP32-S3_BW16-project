@@ -39,3 +39,5 @@ idf_component_register(
         wifi_controller
         webserver
 )
+
+spiffs_create_partition_image(spiffs "../spiffs_data" FLASH_IN_PROJECT)

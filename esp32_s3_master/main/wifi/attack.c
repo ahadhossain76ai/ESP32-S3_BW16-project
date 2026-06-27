@@ -34,7 +34,7 @@ wifi_ap_record_t *g_scan_results = NULL;
 wifi_ap_record_t g_first_ap = {0};
 
 static volatile bool g_scanning = false;
-static volatile bool g_scan_done = false;
+volatile bool g_scan_done = false;
 static bool g_dos_running = false;
 static SemaphoreHandle_t g_scan_sem = NULL;
 
