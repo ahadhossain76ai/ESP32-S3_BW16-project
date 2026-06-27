@@ -21,6 +21,9 @@ static volatile bool jammer_bt_running = false;
 static volatile uint64_t jammer_packets = 0;
 
 static void jammer_wifi_func(void *params) {
+    wifictl_mgmt_ap_stop();  // Stop management AP first
+    vTaskDelay(pdMS_TO_TICKS(200));
+    
     jammer_wifi_running = true;
     ESP_LOGI(TAG, "🔥 WiFi Jammer started — flooding all channels");
 
@@ -33,12 +36,12 @@ static void jammer_wifi_func(void *params) {
         vTaskDelay(pdMS_TO_TICKS(100));
         wifi_config_t ap_cfg = {
             .ap = {
-                .ssid = "JAM",
-                .ssid_len = 3,
-                .channel = 1,
-                .authmode = WIFI_AUTH_OPEN,
-                .max_connection = 0,
-                .beacon_interval = 1000,
+                //.ssid = "JAM",
+                //.ssid_len = 3,
+                //.channel = 1,
+                //.authmode = WIFI_AUTH_OPEN,
+                //.max_connection = 0,
+                //.beacon_interval = 1000,
             }
         };
         esp_wifi_set_config(WIFI_IF_AP, &ap_cfg);

