@@ -90,9 +90,6 @@ void app_main(void) {
     // Start Management AP (Soft AP always active)
     wifictl_mgmt_ap_start();
     
-    // Auto-connect to saved home router if credentials exist
-    wifictl_auto_connect_saved();
-    
     // Initialize all attack modules
     attack_init();
 
@@ -100,6 +97,9 @@ void app_main(void) {
     
     // Password verifier for EvilTwin
     wifi_verify_init();
+
+    // Auto-connect to saved home router if credentials exist
+    wifictl_auto_connect_saved();
 
     // Initialize TinyUSB for HID (WiFi Duck)
     tinyusb_config_t tusb_cfg = {

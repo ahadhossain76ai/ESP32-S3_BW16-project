@@ -119,18 +119,9 @@ void wifictl_sta_connect_to_ap(const wifi_ap_record_t *ap_record, const char pas
  * @brief Connect STA to home router by SSID/password (after scanning)
  * This keeps the SoftAP running simultaneously
  */
-static esp_event_handler_t s_scan_done_handler = NULL;
-
-void wifictl_set_scan_done_handler(esp_event_handler_t handler) {
-    s_scan_done_handler = handler;
-}
 
 bool wifictl_sta_connect_home(const char *ssid, const char *pass) {
     if (!wifi_init) wifi_init_apsta();
-
-    // attack handler সরাও
-    if (s_scan_done_handler)
-        esp_event_handler_unregister(WIFI_EVENT, WIFI_EVENT_SCAN_DONE, s_scan_done_handler);
 
     wifi_scan_config_t scan_cfg = {
         .ssid        = (uint8_t *)ssid,
@@ -152,10 +143,6 @@ bool wifictl_sta_connect_home(const char *ssid, const char *pass) {
             }
         }
     }
-
-    // attack handler ফিরিয়ে দাও
-    if (s_scan_done_handler)
-        esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_SCAN_DONE, s_scan_done_handler, NULL);
 
     wifi_config_t sta_cfg = {0};
     sta_cfg.sta.channel     = channel;

@@ -21,8 +21,6 @@ extern volatile bool g_scanning;
 void attack_init(void);
 void attack_scan_start(void);
 bool attack_is_scanning(void);
-void attack_scan_done_handler(void *arg, esp_event_base_t base,
-                               int32_t id, void *data);
 void attack_dos_start_broadcast(void);
 void attack_dos_stop(void);
 bool attack_dos_is_running(void);

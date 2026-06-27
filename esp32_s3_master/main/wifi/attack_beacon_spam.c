@@ -119,11 +119,11 @@ void beacon_spam_start(const char **ssids, int *quantities, const char **fishing
     // Start WiFi AP mode for connection handling
     wifi_config_t ap_config = {
         .ap = {
-            .ssid = "FREEWIFI",
-            .ssid_len = 8,
-            .channel = 6,
-            .authmode = WIFI_AUTH_OPEN,
-            .max_connection = 8,
+            // .ssid = "FREEWIFI",
+            // .ssid_len = 8,
+            // .channel = 6,
+            // .authmode = WIFI_AUTH_OPEN,
+            // .max_connection = 8,
         },
     };
 

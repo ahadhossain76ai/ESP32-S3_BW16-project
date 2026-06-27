@@ -15,6 +15,7 @@
 #include "attack_ducky.h"
 #include "bw16_uart.h"
 #include "wifi_controller.h"
+#include "ap_scanner.h"
 #include "wsl_bypasser.h"
 #include "esp_log.h"
 #include "esp_wifi.h"
@@ -158,66 +159,72 @@ static const attack_template_config_t g_templates[] = {
 
 // ==================== SCAN ====================
 
-void attack_scan_done_handler(void *arg, esp_event_base_t base,
-                               int32_t id, void *data)
-{
-    uint16_t count = 0;
-    wifi_ap_record_t *aps = NULL;
-
-    esp_wifi_scan_get_ap_num(&count);
-    if (count > 0) {
-        aps = (wifi_ap_record_t *)malloc(count * sizeof(wifi_ap_record_t));
-        if (aps) {
-            esp_wifi_scan_get_ap_records(&count, aps);
-        }
-    }
-
-    if (g_scan_results) free(g_scan_results);
-    g_scan_results = aps;
-    g_scan_result_count = count;
-
-    if (count > 0 && aps) {
-        memcpy(&g_first_ap, &aps[0], sizeof(wifi_ap_record_t));
-    }
-
-    g_scanning = false;
-    g_scan_done = true;
-
-    if (g_scan_sem) xSemaphoreGive(g_scan_sem);
-
-    ESP_LOGI(TAG, "Scan done: %d APs found (g_scan_done set to true)", g_scan_result_count);
-}
-
-void attack_init(void)
-{
-    if (!g_scan_sem) {
+void attack_init(void) {
+    ESP_LOGI(TAG, "Attack engine initialized");
+    
+    if (g_scan_sem == NULL) {
         g_scan_sem = xSemaphoreCreateBinary();
     }
-    esp_event_handler_instance_register(
-        WIFI_EVENT, WIFI_EVENT_SCAN_DONE,
-        attack_scan_done_handler, NULL, NULL);
-    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, WIFI_EVENT_SCAN_DONE, 
-                                                &attack_scan_done_handler, NULL));
-    
-    ESP_LOGI(TAG, "Attack engine initialized");
 }
 
-void attack_scan_start(void)
-{
-    if (g_scanning) return;
+void attack_scan_start(void) {
+    if (g_scanning) {
+        ESP_LOGW(TAG, "Scan already in progress");
+        return;
+    }
+    
     g_scanning = true;
     g_scan_done = false;
-
-    wifi_scan_config_t scan_cfg = {
+    g_scan_result_count = 0;
+    
+    // আগের results ফ্রি করুন
+    if (g_scan_results) {
+        free(g_scan_results);
+        g_scan_results = NULL;
+    }
+    
+    ESP_LOGI(TAG, "Scanning for networks...");
+    
+    wifi_scan_config_t scan_config = {
         .ssid = NULL,
         .bssid = NULL,
         .channel = 0,
         .show_hidden = true,
         .scan_type = WIFI_SCAN_TYPE_ACTIVE,
-        .scan_time.passive = 0
+        .scan_time.active.min = 120,
+        .scan_time.active.max = 120,
     };
-    esp_wifi_scan_start(&scan_cfg, false);
-    ESP_LOGI(TAG, "Scan started...");
+    
+    // ★★★ BLOCKING scan (true) — STA connected থাকলেও কাজ করবে ★★★
+    esp_err_t err = esp_wifi_scan_start(&scan_config, true);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "Scan failed: %s", esp_err_to_name(err));
+        g_scanning = false;
+        return;
+    }
+    
+    // Results নিন
+    uint16_t count = 0;
+    esp_wifi_scan_get_ap_num(&count);
+    
+    if (count > 0) {
+        g_scan_results = (wifi_ap_record_t*)calloc(count, sizeof(wifi_ap_record_t));
+        if (g_scan_results) {
+            esp_wifi_scan_get_ap_records(&count, g_scan_results);
+            g_scan_result_count = count;
+            if (count > 0) {
+                g_first_ap = g_scan_results[0];
+            }
+            
+            // ★★★ এখানে ap_scanner.c-ও update করুন ★★★
+            ap_scanner_set_results(g_scan_results, count);
+        }
+    }
+    
+    ESP_LOGI(TAG, "Scan complete: %d APs found", g_scan_result_count);
+    
+    g_scan_done = true;
+    g_scanning = false;
 }
 
 bool attack_is_scanning(void)

@@ -16,7 +16,6 @@ void wifictl_sta_connect_to_ap(const wifi_ap_record_t *ap_record, const char pas
 bool wifictl_sta_connect_home(const char *ssid, const char *pass);
 bool wifictl_sta_is_connected(void);
 void wifictl_sta_disconnect(void);
-void wifictl_set_scan_done_handler(esp_event_handler_t handler);
 
 // Auto-connect on boot
 void wifictl_auto_connect_saved(void);
