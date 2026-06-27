@@ -16,6 +16,7 @@ typedef struct {
 extern int g_scan_result_count;
 extern wifi_ap_record_t *g_scan_results;
 extern wifi_ap_record_t g_first_ap;
+extern volatile bool g_scanning;
 
 void attack_init(void);
 void attack_scan_start(void);

@@ -34,6 +34,7 @@
 extern int g_scan_result_count;
 extern wifi_ap_record_t *g_scan_results;
 extern bool g_scan_done;
+extern volatile bool g_scanning;  // from attack.c
 
 static const char *TAG = "WEBSERVER";
 static httpd_handle_t server = NULL;
@@ -79,7 +80,7 @@ static esp_err_t send_json(httpd_req_t *req, cJSON *root, int status_code) {
 static esp_err_t send_error(httpd_req_t *req, const char *msg) {
     cJSON *root = cJSON_CreateObject();
     cJSON_AddStringToObject(root, "error", msg);
-    return send_json(req, root, 400);
+    return send_json(req, root, 200);
 }
 
 // ==================== API: SCAN RESULTS ====================
@@ -202,7 +203,7 @@ static esp_err_t api_scan_status_handler(httpd_req_t *req) {
         cJSON_AddStringToObject(root, "status", "idle");
     }
     
-    return send_json(req, root);
+    return send_json(req, root, 200);  // ← FIXED: added , 200
 }
 
 static esp_err_t send_status(httpd_req_t *req, const char *msg) {
@@ -656,7 +657,6 @@ static esp_err_t api_beacon_start_handler(httpd_req_t *req)
     }
     buf[ret] = '\0';
 
-    // NULL/খালি বডি চেক
     if (strlen(buf) == 0) {
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Empty body");
         return ESP_FAIL;
@@ -668,83 +668,92 @@ static esp_err_t api_beacon_start_handler(httpd_req_t *req)
         return ESP_FAIL;
     }
 
-    cJSON *ssids = cJSON_GetObjectItem(root, "ssids");
-    cJSON *quantities = cJSON_GetObjectItem(root, "quantities");
-    cJSON *fishing_pages = cJSON_GetObjectItem(root, "fishing_pages");
+    // --- KEY FIX: সরাসরি array থেকে read করো (string array format) ---
+    cJSON *ssids_arr = cJSON_GetObjectItem(root, "ssids");
+    cJSON *quantities_arr = cJSON_GetObjectItem(root, "quantities");
+    cJSON *fishing_arr = cJSON_GetObjectItem(root, "fishing_pages");
 
-    // NULL চেক
-    if (!cJSON_IsArray(ssids)) {
+    if (!cJSON_IsArray(ssids_arr)) {
         cJSON_Delete(root);
         httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "ssids must be an array");
         return ESP_FAIL;
     }
-    
+
     int count = cJSON_GetArraySize(ssids_arr);
     if (count > 20) count = 20;
-    
-    // Allocate arrays
+
+    // Allocate arrays for beacon_spam_start()
     const char **ssids = calloc(count, sizeof(char*));
     int *quantities = calloc(count, sizeof(int));
     const char **fishing = calloc(count, sizeof(char*));
-    
+
     if (!ssids || !quantities || !fishing) {
         free((void*)ssids); free(quantities); free((void*)fishing);
-        cJSON_Delete(json);
+        cJSON_Delete(root);
         cJSON *e = cJSON_CreateObject();
         cJSON_AddStringToObject(e, "error", "Memory allocation failed");
         return send_json(req, e, 500);
     }
-    
+
     int valid_count = 0;
     for (int i = 0; i < count; i++) {
-        cJSON *item = cJSON_GetArrayItem(ssids_arr, i);
-        if (!item) continue;
-        
-        cJSON *ssid_j = cJSON_GetObjectItem(item, "ssid");
-        cJSON *qty_j = cJSON_GetObjectItem(item, "quantity");
-        cJSON *fish_j = cJSON_GetObjectItem(item, "fishing_page");
-        
-        if (ssid_j && cJSON_IsString(ssid_j) && strlen(cJSON_GetStringValue(ssid_j)) > 0) {
-            ssids[valid_count] = strdup(cJSON_GetStringValue(ssid_j));
-            quantities[valid_count] = (qty_j && cJSON_IsNumber(qty_j)) ? 
-                                       (int)cJSON_GetNumberValue(qty_j) : 1;
-            if (quantities[valid_count] < 1) quantities[valid_count] = 1;
-            if (quantities[valid_count] > 20) quantities[valid_count] = 20;
-            
-            fishing[valid_count] = (fish_j && cJSON_IsString(fish_j) && 
-                                    strlen(cJSON_GetStringValue(fish_j)) > 0) ? 
-                                    strdup(cJSON_GetStringValue(fish_j)) : "";
-            
-            ESP_LOGI(TAG, "SSID[%d]: '%s' qty=%d fishing='%s'", 
-                     valid_count, ssids[valid_count], quantities[valid_count], fishing[valid_count]);
-            valid_count++;
+        cJSON *ssid_item = cJSON_GetArrayItem(ssids_arr, i);
+        if (!ssid_item || !cJSON_IsString(ssid_item)) continue;
+
+        const char *ssid_str = cJSON_GetStringValue(ssid_item);
+        if (ssid_str == NULL || strlen(ssid_str) == 0) continue;
+
+        ssids[valid_count] = strdup(ssid_str);
+
+        // Quantity from parallel array
+        cJSON *qty_item = NULL;
+        if (quantities_arr && cJSON_IsArray(quantities_arr) && i < cJSON_GetArraySize(quantities_arr)) {
+            qty_item = cJSON_GetArrayItem(quantities_arr, i);
         }
+        quantities[valid_count] = (qty_item && cJSON_IsNumber(qty_item)) ?
+                                   (int)cJSON_GetNumberValue(qty_item) : 1;
+        if (quantities[valid_count] < 1) quantities[valid_count] = 1;
+        if (quantities[valid_count] > 20) quantities[valid_count] = 20;
+
+        // Fishing page from parallel array
+        cJSON *fish_item = NULL;
+        if (fishing_arr && cJSON_IsArray(fishing_arr) && i < cJSON_GetArraySize(fishing_arr)) {
+            fish_item = cJSON_GetArrayItem(fishing_arr, i);
+        }
+        fishing[valid_count] = (fish_item && cJSON_IsString(fish_item) &&
+                                strlen(cJSON_GetStringValue(fish_item)) > 0) ?
+                                strdup(cJSON_GetStringValue(fish_item)) : "";
+
+        ESP_LOGI(TAG, "SSID[%d]: '%s' qty=%d fishing='%s'",
+                 valid_count, ssids[valid_count], quantities[valid_count],
+                 fishing[valid_count] ? fishing[valid_count] : "(none)");
+        valid_count++;
     }
-    
+
     if (valid_count == 0) {
         for (int i = 0; i < count; i++) {
             if (ssids[i]) free((void*)ssids[i]);
-            if (fishing[i] && fishing[i] != (const char*)1 && strlen(fishing[i]) > 0) 
+            if (fishing[i] && fishing[i] != (const char*)1 && strlen(fishing[i]) > 0)
                 free((void*)fishing[i]);
         }
         free((void*)ssids); free(quantities); free((void*)fishing);
-        cJSON_Delete(json);
+        cJSON_Delete(root);
         cJSON *e = cJSON_CreateObject();
         cJSON_AddStringToObject(e, "error", "No valid SSIDs provided");
         return send_json(req, e, 400);
     }
-    
-    beacon_spam_start(ssids, quantities, fishing, valid_count);
-    
+
+    beacon_spam_start((const char**)ssids, quantities, fishing, valid_count);
+
     // Cleanup
     for (int i = 0; i < valid_count; i++) {
         if (ssids[i]) free((void*)ssids[i]);
-        if (fishing[i] && fishing[i] != (const char*)1 && strlen(fishing[i]) > 0) 
+        if (fishing[i] && fishing[i] != (const char*)1 && strlen(fishing[i]) > 0)
             free((void*)fishing[i]);
     }
     free((void*)ssids); free(quantities); free((void*)fishing);
-    cJSON_Delete(json);
-    
+    cJSON_Delete(root);
+
     cJSON *resp = cJSON_CreateObject();
     cJSON_AddStringToObject(resp, "status", "started");
     cJSON_AddNumberToObject(resp, "ssid_count", valid_count);
