@@ -26,5 +26,6 @@ int captured_data_get_count(void);
 const char* captured_data_get(int index, char *ssid, char *password, char *time_str);
 bool captured_data_is_verified(int index);
 void captured_data_clear(void);
+void start_captive_portal(const uint8_t *bssid);
 
 #endif

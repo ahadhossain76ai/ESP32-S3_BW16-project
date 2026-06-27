@@ -34,7 +34,7 @@ static TaskHandle_t g_pmkid_task = NULL;
 static wifi_promiscuous_cb_t g_original_promisc_cb = NULL;  // FIX: For callback chaining
 
 // 5GHz channel list
-static const uint8_t g_channels_5ghz[] = {
+static const uint8_t __attribute__((unused)) g_channels_5ghz[] = {
     36, 40, 44, 48, 52, 56, 60, 64,
     100, 104, 108, 112, 116, 120, 124, 128,
     132, 136, 140, 144, 149, 153, 157, 161, 165
@@ -42,7 +42,7 @@ static const uint8_t g_channels_5ghz[] = {
 #define NUM_5GHZ_CHANNELS (sizeof(g_channels_5ghz) / sizeof(g_channels_5ghz[0]))
 
 // 2.4GHz channel list
-static const uint8_t g_channels_24ghz[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13};
+static const uint8_t __attribute__((unused)) g_channels_24ghz[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13};
 #define NUM_24GHZ_CHANNELS (sizeof(g_channels_24ghz) / sizeof(g_channels_24ghz[0]))
 
 // ==================== FIXED: EAPOL/PMKID PARSING ====================

