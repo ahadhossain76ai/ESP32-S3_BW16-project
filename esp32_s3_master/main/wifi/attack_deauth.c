@@ -96,10 +96,13 @@ static void deauth_task_func(void *params) {
              g_deauth_target_count, g_pkt_delay, g_pkt_count);
 
     for (int i = 0; i < g_deauth_target_count; i++) {
-        ESP_LOGI(TAG, "  Target %d: " MACSTR " (ch %d) [%s]", i + 1,
-                 MAC2STR(g_deauth_targets[i].bssid),
-                 g_deauth_targets[i].channel,
-                 g_deauth_targets[i].is_5ghz ? "5GHz" : "2.4GHz");
+        ESP_LOGI(TAG, "  Target %d: %02x:%02x:%02x:%02x:%02x:%02x (ch %d) [%s]", 
+            i + 1,
+            g_deauth_targets[i].bssid[0], g_deauth_targets[i].bssid[1],
+            g_deauth_targets[i].bssid[2], g_deauth_targets[i].bssid[3],
+            g_deauth_targets[i].bssid[4], g_deauth_targets[i].bssid[5],
+            g_deauth_targets[i].channel,
+            g_deauth_targets[i].is_5ghz ? "5GHz" : "2.4GHz");
     }
 
     // FIX: Store original WiFi mode to restore later

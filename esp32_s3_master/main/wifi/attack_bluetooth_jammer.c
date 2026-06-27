@@ -10,6 +10,8 @@
 #include "esp_rom_sys.h"
 #include "esp_random.h"
 #include "esp_bt.h"
+#include "esp_gap_ble_api.h"
+#include "esp_gatt_common_api.h"
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>

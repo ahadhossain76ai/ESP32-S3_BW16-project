@@ -125,8 +125,10 @@ static void start_evil_ap(void) {
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
     
-    ESP_LOGI(TAG, "🔓 Evil Twin AP started: '%s' (OPEN, ch %d, BSSID " MACSTR ")",
-             g_evil_ssid, g_target_channel, MAC2STR(g_evil_bssid));
+    ESP_LOGI(TAG, "🔓 Evil Twin AP started: '%s' (OPEN, ch %d, BSSID %02x:%02x:%02x:%02x:%02x:%02x)",
+        g_evil_ssid, g_target_channel,
+        g_evil_bssid[0], g_evil_bssid[1], g_evil_bssid[2],
+        g_evil_bssid[3], g_evil_bssid[4], g_evil_bssid[5]);
 }
 
 // FIX: Captive portal DNS handler - redirect all DNS queries to ESP
@@ -212,8 +214,9 @@ static void eviltwin_wifi_event_handler(void *arg, esp_event_base_t event_base,
     if (!g_eviltwin_running) return;
     if (event_base == WIFI_EVENT && event_id == WIFI_EVENT_STA_CONNECTED) {
         wifi_event_sta_connected_t *ev = (wifi_event_sta_connected_t *)event_data;
-        ESP_LOGI(TAG, "🔗 Client connected to Evil Twin AP! MAC: " MACSTR,
-                 MAC2STR(ev->mac));
+        ESP_LOGI(TAG, "🔗 Client connected to Evil Twin AP! MAC: %02x:%02x:%02x:%02x:%02x:%02x",
+            ev->mac[0], ev->mac[1], ev->mac[2],
+            ev->mac[3], ev->mac[4], ev->mac[5]);
         hw_led_blink(2, 50);
     }
 }

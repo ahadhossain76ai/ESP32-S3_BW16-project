@@ -18,6 +18,7 @@
 #include "esp_wifi.h"
 #include "esp_timer.h"
 #include "esp_random.h"
+#include "cJSON.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -83,14 +84,14 @@ static void pmkid_promiscuous_cb(void *buf, wifi_promiscuous_pkt_type_t type) {
     }
 
     wifi_promiscuous_pkt_t *pkt = (wifi_promiscuous_pkt_t *)buf;
-    wifi_ieee80211_packet_t *ipkt = (wifi_ieee80211_packet_t *)pkt->payload;
+    // wifi_ieee80211_packet_t *ipkt = (wifi_ieee80211_packet_t *)pkt->payload;
     uint8_t *frame = pkt->payload;
     int frame_len = pkt->rx_ctrl.sig_len;
 
     // FIX: Better frame type detection
     uint8_t fc = frame[FRAME_FC_OFFSET];
     uint8_t frame_type = fc & 0x0C;  // Bits 2-3: type
-    uint8_t frame_subtype = (fc >> 4) & 0x0F;  // Bits 4-7: subtype
+    // uint8_t frame_subtype = (fc >> 4) & 0x0F;  // Bits 4-7: subtype
     
     // We're interested in: QoS Data (type=2, subtype=8) or Data (type=2, subtype=0)
     // These contain EAPOL frames
@@ -131,9 +132,9 @@ static void pmkid_promiscuous_cb(void *buf, wifi_promiscuous_pkt_type_t type) {
         return;
     }
     
-    uint8_t eapol_version = eapol[0];
+    //uint8_t eapol_version = eapol[0];
     uint8_t eapol_type = eapol[1];
-    uint16_t eapol_body_len = (eapol[2] << 8) | eapol[3];
+    // uint16_t eapol_body_len = (eapol[2] << 8) | eapol[3];
     
     // We only care about EAPOL-Key frames (type = 3)
     if (eapol_type != EAPOL_TYPE_KEY) {
@@ -153,7 +154,7 @@ static void pmkid_promiscuous_cb(void *buf, wifi_promiscuous_pkt_type_t type) {
     
     // FIX: Check Key Type bit (bit 3 of Key Info)
     // 0 = Group Key, 1 = Pairwise Key (contains PMKID)
-    bool is_pairwise = (key_info & 0x08) != 0;
+    // bool is_pairwise = (key_info & 0x08) != 0;
     
     // FIX: Check Install bit (bit 6) — set on Message 1 of 4-way handshake
     bool install = (key_info & 0x40) != 0;
@@ -162,7 +163,7 @@ static void pmkid_promiscuous_cb(void *buf, wifi_promiscuous_pkt_type_t type) {
     // Key Info byte 2, bit 4 = Key MIC bit (set on messages containing MIC)
     // Key Info byte 2, bit 3 = Key ACK (set on message 1)
     // PMKID is present when both are set
-    bool key_mic = (key_info & 0x0100) != 0;  // Bit 8
+    // bool key_mic = (key_info & 0x0100) != 0;  // Bit 8
     bool key_ack = (key_info & 0x0080) != 0;  // Bit 7
     
     // If this is Message 1 (install=1, key_ack=1, key_mic=0) — PMKID may be in Key Data
@@ -176,7 +177,7 @@ static void pmkid_promiscuous_cb(void *buf, wifi_promiscuous_pkt_type_t type) {
     // FIX: Check for PMKID in Key Data field
     // Key Data is at variable offset depending on descriptor version
     int key_data_offset;
-    int nonce_offset, iv_offset, rsc_offset, mic_offset;
+    //int nonce_offset, iv_offset, rsc_offset, mic_offset;
     int key_data_len_pos;
     
     if (key_desc == EAPOL_KEY_DESC_IEEE80211 && eapol_len >= 4 + 99) {
@@ -268,8 +269,10 @@ static void pmkid_promiscuous_cb(void *buf, wifi_promiscuous_pkt_type_t type) {
                 }
                 pmkid_hex[32] = '\0';
                 
-                ESP_LOGI(TAG, "✅ PMKID captured! BSSID: " MACSTR " SSID: %s PMKID: %s",
-                         MAC2STR(cap->bssid), cap->ssid, pmkid_hex);
+                ESP_LOGI(TAG, "✅ PMKID captured! BSSID: %02x:%02x:%02x:%02x:%02x:%02x SSID: %s PMKID: %s",
+                    cap->bssid[0], cap->bssid[1], cap->bssid[2],
+                    cap->bssid[3], cap->bssid[4], cap->bssid[5],
+                    cap->ssid, pmkid_hex);
                 
                 g_pmkid_count++;
                 
@@ -415,6 +418,49 @@ char* pmkid_capture_export_json(void) {
     char *json = cJSON_Print(root);
     cJSON_Delete(root);
     return json;
+}
+
+// ==================== AUTO SCAN TASK ====================
+static void pmkid_auto_scan_task(void *pv) {
+    ESP_LOGI(TAG, "PMKID auto-scan started — cycling all channels");
+
+    g_pmkid_auto_scan = true;
+    g_pmkid_running = true;
+    
+    esp_wifi_set_promiscuous_rx_cb(pmkid_promiscuous_cb);
+    esp_wifi_set_promiscuous(true);
+    
+    int round = 0;
+    while (g_pmkid_auto_scan && g_pmkid_running) {
+        round++;
+        
+        // Scan 2.4GHz channels first
+        for (int i = 0; i < NUM_24GHZ_CHANNELS && g_pmkid_auto_scan; i++) {
+            if (!g_pmkid_running) break;
+            
+            uint8_t ch = g_channels_24ghz[i];
+            esp_wifi_set_channel(ch, WIFI_SECOND_CHAN_NONE);
+            
+            // Send deauth on this channel to provoke handshake
+            // (brodcast deauth to trigger client reconnection)
+            uint8_t broadcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+            
+            // Small dwell time on each channel
+            vTaskDelay(pdMS_TO_TICKS(200));
+        }
+        
+        // Log progress
+        ESP_LOGI(TAG, "PMKID auto-scan round %d: %d captures so far, %lu packets analyzed",
+                 round, g_pmkid_count, (unsigned long)g_packet_count);
+        
+        // Brief pause between full cycles
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    
+    ESP_LOGI(TAG, "PMKID auto-scan stopped. Total captures: %d", g_pmkid_count);
+    g_pmkid_running = false;
+    g_pmkid_task = NULL;
+    vTaskDelete(NULL);
 }
 
 bool pmkid_capture_is_running(void) {
