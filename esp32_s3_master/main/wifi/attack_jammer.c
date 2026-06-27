@@ -5,6 +5,7 @@
 #include "attack_jammer.h"
 #include "attack_bluetooth_jammer.h"
 #include "bw16_uart.h"
+#include "wifi_controller.h"
 #include "esp_rom_sys.h"
 #include <stdio.h>
 #include <string.h>
@@ -21,8 +22,6 @@ static volatile bool jammer_bt_running = false;
 static volatile uint64_t jammer_packets = 0;
 
 static void jammer_wifi_func(void *params) {
-    wifictl_mgmt_ap_stop();  // Stop management AP first
-    vTaskDelay(pdMS_TO_TICKS(200));
     
     jammer_wifi_running = true;
     ESP_LOGI(TAG, "🔥 WiFi Jammer started — flooding all channels");

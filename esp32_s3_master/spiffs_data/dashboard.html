@@ -1041,131 +1041,203 @@
 
 </main>
 
-<!-- ==================== JAVASCRIPT ==================== -->
+<!-- ==================== JAVASCRIPT 1 ==================== -->
 <script>
 (function() {
   'use strict';
 
   // ==================== CONFIGURATION ====================
-  const API = {
-    SCAN:         '/api/scan/start',
-    SCAN_STATUS:  '/api/scan/status',
-    DEAUTH_START: '/api/deauth/start',
-    DEAUTH_STOP:  '/api/deauth/stop',
-    DEAUTH_STATUS:'/api/deauth/status',
-    EVILTWIN_START:'/api/eviltwin/start',
-    EVILTWIN_STOP: '/api/eviltwin/stop',
-    BEACON_START: '/api/beacon/start',
-    BEACON_STOP:  '/api/beacon/stop',
-    JAMMER_WIFI:  '/api/jammer/wifi',
-    JAMMER_BT:    '/api/jammer/bt',
-    JAMMER_STOP:  '/api/jammer/stop',
-    DUCKY_INJECT: '/api/ducky/inject',
-    CAPTURED:     '/api/captured',
-    BW16_STATUS:  '/api/bw16/status',
-    FILES_LIST:   '/api/files/list',
-    TEMPLATES:    '/api/templates/list',
-    TEMPLATE_DEPLOY:'/api/templates/deploy',
-    UPLOAD:       '/api/files/upload',
+  const CONFIG = {
+    // --- WiFi Attack ---
+    SCAN_24:          '/api/scan',
+    SCAN_5:           '/api/scan?type=full',
+    DEAUTH_START:     '/api/deauth/start',
+    DEAUTH_STOP:      '/api/deauth/stop',
+    EVILTWIN_START:   '/api/eviltwin/start',
+    EVILTWIN_STOP:    '/api/eviltwin/stop',
+    // --- Beacon / Jammer / Duck / Templates ---
+    BEACON_START:     '/api/beacon/start',
+    BEACON_STOP:      '/api/beacon/stop',
+    JAMMER_WIFI:      '/api/jammer/wifi',
+    JAMMER_BT:        '/api/jammer/bt',
+    JAMMER_STOP:      '/api/jammer/stop',
+    DUCKY_INJECT:     '/api/ducky/inject',
+    CAPTURED:         '/api/captured',
+    STATUS:           '/api/status',
+    BW16_STATUS:      '/api/bw16/status',
+    FILES_LIST:       '/api/files/list',
+    TEMPLATES:        '/api/templates/list',
+    TEMPLATE_DEPLOY:  '/api/templates/deploy',
+    UPLOAD:           '/api/files/upload',
   };
 
+  // ==================== STATE ====================
+  const state = {
+    // WiFi Attack
+    scanResults24:      [],
+    scanResults5:       [],
+    selectedTargets:    [],
+    isScanning:         false,
+    espOnline:          false,
+    // Shared
+    bwOnline:           false,
+    // Jammer
+    wifiJammerActive:   false,
+    btJammerActive:     false,
+    // Beacon / Duck
+    fishingFiles:       [],
+    duckyFileContent:   null,
+  };
+
+  // ==================== HELPERS ====================
   const $ = id => document.getElementById(id);
-  const escapeHtml = s => { const d=document.createElement('div'); d.textContent=s||''; return d.innerHTML; };
+
+  function escapeHtml(str) {
+    if (!str) return '';
+    const d = document.createElement('div');
+    d.textContent = str;
+    return d.innerHTML;
+  }
+
   function addLog(logId, msg, type) {
-    const log = $(logId); if (!log) return;
+    type = type || 'info';
+    const log = $(logId);
+    if (!log) return;
     const entry = document.createElement('div');
-    entry.className = 'log-entry ' + (type || 'info');
+    entry.className = 'log-entry ' + type;
     entry.textContent = msg;
     log.appendChild(entry);
     log.scrollTop = log.scrollHeight;
   }
-  function clearLog(logId) { const el = $(logId); if (el) el.innerHTML = ''; }
 
-  async function api(url, method, body) {
+  function rssiBars(rssi) {
+    return Math.min(Math.max(Math.round((rssi + 100) / 25), 1), 4);
+  }
+
+  async function api(endpoint, method, body) {
     method = method || 'GET';
     try {
       const opts = { method, headers: { 'Content-Type': 'application/json' } };
       if (body) opts.body = JSON.stringify(body);
-      const res = await fetch(url, opts);
-      return await res.json();
-    } catch(e) { return { success: false, error: e.message }; }
+      const res  = await fetch(endpoint, opts);
+      const text = await res.text();
+      try { return JSON.parse(text); }
+      catch (e) { return { raw: text, success: res.ok }; }
+    } catch (err) {
+      console.error('API Error:', err);
+      return { success: false, error: err.message };
+    }
   }
 
-  function rssiBars(rssi) { return Math.min(Math.max(Math.round((rssi+100)/25),1),4); }
-
-  // ==================== STATE ====================
-  const state = {
-    results24: [], results5: [], selectedTargets: [], scanning: false,
-    wifiJammerActive: false, btJammerActive: false, bwOnline: false,
-    beaconSsids: [], phishingFiles: [], fishingFiles: [],
-    duckyFileContent: null,
-  };
-
-  // ==================== NAV ====================
-  document.querySelectorAll('.nav-btn').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
-      document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
-      btn.classList.add('active');
-      const panel = $(`panel-${btn.dataset.panel}`);
-      if (panel) panel.classList.add('active');
-    });
-  });
-
   // ==================== STATUS POLLING ====================
+  // logic: polls /api/status for ESP32 chip + /api/bw16/status for BW16
   async function pollStatus() {
-    const res = await api(API.BW16_STATUS);
-    if (res && res.connected !== undefined) {
-      state.bwOnline = res.connected;
-      const chip = $('bwStatus'), dot = $('bwDot');
-      if (res.connected) {
-        if (chip) chip.className = 'status-chip online';
-        if (dot) dot.className = 'dot online';
-        // Remove offline message
-        const offlineMsg = document.querySelector('#scanResults5 .not-connected');
-        if (offlineMsg) {
-          offlineMsg.innerHTML = '✅ BW16 Connected';
-          offlineMsg.style.color = 'var(--accent3)';
-        }
-      } else {
-        if (chip) chip.className = 'status-chip offline';
-        if (dot) dot.className = 'dot offline';
-        // Show offline message
-        const c5 = $('scanResults5');
-        if (c5 && !c5.querySelector('.not-connected')) {
-          c5.innerHTML = `<div class="not-connected" id="bwOfflineMsg">
-            5GHz Module Not Connected<br>
-            <span style="font-size:8px;opacity:0.6">BW16 RTL8720DN offline</span>
-          </div>`;
-        }
+    // ESP32 S3 endpoint
+    const res = await api(CONFIG.STATUS);
+    if (res.esp32 || res.status) {
+      state.espOnline = true;
+      const c = $('espStatus'), d = $('espDot');
+      if (c) c.className = 'status-chip online';
+      if (d) d.className = 'dot online';
+    }
+
+    // BW16 endpoint (more reliable: returns {connected: bool})
+    const bwRes = await api(CONFIG.BW16_STATUS);
+    if (bwRes && bwRes.connected !== undefined) {
+      state.bwOnline = bwRes.connected;
+    } else if (res.bw16 === 'Connected' || res.bw16_online) {
+      // fallback from /api/status
+      state.bwOnline = true;
+    }
+
+    const chip = $('bwStatus'), dot = $('bwDot');
+    if (state.bwOnline) {
+      if (chip) chip.className = 'status-chip online';
+      if (dot)  dot.className  = 'dot online';
+    } else {
+      if (chip) chip.className = 'status-chip offline';
+      if (dot)  dot.className  = 'dot offline';
+      const c5 = $('scanResults5');
+      if (c5 && !c5.querySelector('.not-connected')) {
+        c5.innerHTML = `<div class="not-connected" id="bwOfflineMsg">
+          5GHz Module Not Connected<br>
+          <span style="font-size:8px;opacity:0.6">BW16 RTL8720DN offline</span>
+        </div>`;
       }
     }
   }
 
-  // ==================== NETWORK RENDER ====================
+  // ==================== SCAN ====================
+  async function runScan() {
+    if (state.isScanning) return;
+    state.isScanning = true;
+
+    const btn       = $('scanBtn');
+    const progress  = $('scanProgress');
+    const container = $('scanResultsContainer');
+    const status    = $('scanStatus');
+
+    if (btn)       btn.disabled = true;
+    if (progress)  progress.classList.add('active');
+    if (status)    status.textContent = '// scanning...';
+    if (container) container.style.display = 'block';
+
+    addLog('attackLog', 'Scanning for networks...', 'info');
+
+    const res24 = await api(CONFIG.SCAN_24);
+    state.scanResults24 = res24.networks || [];
+
+    state.scanResults5 = [];
+    if (state.bwOnline) {
+      const res5 = await api(CONFIG.SCAN_5);
+      state.scanResults5 = res5.networks || [];
+    }
+
+    renderNetworks(state.scanResults24, 'scanResults24', 'count24', false);
+
+    if (state.bwOnline && state.scanResults5.length > 0) {
+      renderNetworks(state.scanResults5, 'scanResults5', 'count5', true);
+    } else if (!state.bwOnline) {
+      const c5 = $('scanResults5');
+      if (c5) c5.innerHTML = `<div class="not-connected">
+        5GHz Module Not Connected<br>
+        <span style="font-size:8px;opacity:0.6">BW16 RTL8720DN offline</span>
+      </div>`;
+      if ($('count5')) $('count5').textContent = '0';
+    }
+
+    addLog('attackLog', `Scan complete: ${state.scanResults24.length} (2.4GHz) + ${state.scanResults5.length} (5GHz)`, 'success');
+    if (status) status.textContent = `// ${state.scanResults24.length} + ${state.scanResults5.length}`;
+    if (btn)      btn.disabled = false;
+    if (progress) progress.classList.remove('active');
+    state.isScanning = false;
+  }
+
   function renderNetworks(networks, containerId, countId, is5GHz) {
     const container = $(containerId), countEl = $(countId);
     if (!container) return;
     if (!networks || networks.length === 0) {
-      container.innerHTML = '<div class="empty-state">No networks.</div>';
+      container.innerHTML = '<div class="empty-state">No networks found.</div>';
       if (countEl) countEl.textContent = '0';
       return;
     }
     if (countEl) countEl.textContent = networks.length;
     let html = '';
     networks.forEach((net, idx) => {
-      const ssid = net.ssid || '';
-      const isHidden = !ssid.trim();
-      const displaySsid = isHidden ? '<Hidden SSID>' : ssid;
-      const bars = rssiBars(net.rssi || -90);
-      const selClass = is5GHz ? 'red-sel' : '';
-      const barColor = is5GHz ? 'red-bar' : '';
-      html += `<div class="wifi-item ${selClass}" data-idx="${idx}" data-band="${is5GHz?'5':'24'}">`;
+      const ssid      = net.ssid || '';
+      const isHidden  = !ssid.trim();
+      const display   = isHidden ? '<Hidden SSID>' : ssid;
+      const bars      = rssiBars(net.rssi || -90);
+      const selClass  = is5GHz ? 'red-sel'  : '';
+      const barColor  = is5GHz ? 'red-bar' : '';
+      html += `<div class="wifi-item ${selClass}" data-idx="${idx}" data-band="${is5GHz ? '5' : '24'}">`;
       html += `<input type="checkbox" class="wifi-cb">`;
-      html += `<span class="wifi-name ${isHidden?'hidden-ssid':''}">${escapeHtml(displaySsid)}</span>`;
+      html += `<span class="wifi-name ${isHidden ? 'hidden-ssid' : ''}">${escapeHtml(display)}</span>`;
       html += `<div class="wifi-meta"><div class="wifi-bars">`;
-      for (let b=1; b<=4; b++) html += `<div class="bar b${b}${b<=bars?' lit '+barColor:''}"></div>`;
-      html += `</div><span class="ch-label">ch${net.channel||'?'}</span></div></div>`;
+      for (let b = 1; b <= 4; b++) {
+        html += `<div class="bar b${b}${b <= bars ? ' lit ' + barColor : ''}"></div>`;
+      }
+      html += `</div><span class="ch-label">ch${net.channel || '?'}</span></div></div>`;
     });
     container.innerHTML = html;
     container.querySelectorAll('.wifi-cb').forEach(cb => {
@@ -1178,117 +1250,53 @@
     document.querySelectorAll('.wifi-cb:checked').forEach(cb => {
       const item = cb.closest('.wifi-item');
       if (!item) return;
-      const idx = parseInt(item.dataset.idx);
+      const idx  = parseInt(item.dataset.idx);
       const band = item.dataset.band;
-      const list = band === '5' ? state.results5 : state.results24;
-      if (list && list[idx]) state.selectedTargets.push({...list[idx], is_5ghz: band === '5'});
+      const list = band === '5' ? state.scanResults5 : state.scanResults24;
+      if (list && list[idx]) state.selectedTargets.push({ ...list[idx], is_5ghz: band === '5' });
     });
-    const runBtn = $('runAttackBtn');
+    const runBtn     = $('runAttackBtn');
     const attackType = $('attackSelect').value;
     if (runBtn) runBtn.disabled = (attackType !== 'eviltwin' && state.selectedTargets.length === 0);
   }
 
-  // ==================== SCAN ====================
-  async function runScan() {
-    if (state.scanning) return;
-    state.scanning = true;
-    const btn = $('scanBtn'), progress = $('scanProgress'), status = $('scanStatus');
-    const container = $('scanResultsContainer');
-    if (btn) btn.disabled = true;
-    if (progress) progress.classList.add('active');
-    if (status) status.textContent = '// scanning...';
-    if (container) container.style.display = 'block';
-    addLog('attackLog', 'Scanning for networks...', 'info');
-
-    const res = await api(API.SCAN);
-    if (container) container.style.display = 'block';
-
-    // Poll for scan completion
-    let attempts = 0;
-    const poll = setInterval(async () => {
-      const scanStatus = await api(API.SCAN_STATUS);
-      attempts++;
-      if (scanStatus.done || scanStatus.count !== undefined || attempts > 20) {
-        clearInterval(poll);
-
-        // Get combined scan results (both 2.4GHz from ESP32 and any scan data)
-        let networks24 = [];
-        let networks5 = [];
-
-        if (scanStatus.results) {
-          networks24 = scanStatus.results.filter(n => !n.is_5ghz);
-          networks5 = scanStatus.results.filter(n => n.is_5ghz);
-        } else if (scanStatus.count > 0 && scanStatus.networks) {
-          networks24 = scanStatus.networks;
-        }
-
-        state.results24 = networks24;
-        state.results5 = networks5;
-
-        renderNetworks(networks24, 'scanResults24', 'count24', false);
-
-        if (state.bwOnline && networks5.length > 0) {
-          renderNetworks(networks5, 'scanResults5', 'count5', true);
-        } else if (!state.bwOnline) {
-          const c5 = $('scanResults5');
-          if (c5) c5.innerHTML = `<div class="not-connected" id="bwOfflineMsg">
-            5GHz Module Not Connected<br>
-            <span style="font-size:8px;opacity:0.6">BW16 RTL8720DN offline</span>
-          </div>`;
-          if ($('count5')) $('count5').textContent = '0';
-        } else {
-          renderNetworks([], 'scanResults5', 'count5', true);
-        }
-
-        addLog('attackLog', `Scan complete: ${networks24.length} (2.4GHz) + ${networks5.length} (5GHz)`, 'success');
-        if (status) status.textContent = `// ${networks24.length} + ${networks5.length}`;
-        if (btn) btn.disabled = false;
-        if (progress) progress.classList.remove('active');
-        state.scanning = false;
-      }
-    }, 1000);
+  // ==================== EVILTWIN PHISHING PAGES ====================
+  async function loadEviltwinPhishingPages() {
+    const res   = await api(CONFIG.FILES_LIST);
+    const files = res.files || [];
+    const dtFiles = files.filter(f => f.startsWith('DevilTwin/') && f.toLowerCase().endsWith('.html'));
+    const select  = $('eviltwinPhishSelect');
+    if (!select) return;
+    select.innerHTML = '<option value="">── DEVILTWIN PAGE ──</option>';
+    dtFiles.forEach(f => {
+      const opt = document.createElement('option');
+      opt.value       = f;
+      opt.textContent = f.replace(/^DevilTwin\//, '');
+      select.appendChild(opt);
+    });
+    if (dtFiles.length === 0) {
+      select.innerHTML = '<option value="">── NO PAGES IN DEVILTWIN/ ──</option>';
+    }
   }
 
-  // ==================== ATTACK TYPE CHANGE ====================
+  // ==================== ATTACK CONTROLS ====================
   function onAttackTypeChange() {
     const attackType = $('attackSelect').value;
-    const phishContainer = document.getElementById('eviltwinPhishContainer');
-    const runBtn = $('runAttackBtn');
+    const container  = document.getElementById('eviltwinPhishContainer');
+    const runBtn     = $('runAttackBtn');
     if (attackType === 'eviltwin') {
-      if (phishContainer) phishContainer.style.display = 'inline-flex';
-      if (runBtn) runBtn.disabled = $('eviltwinPhishSelect').value === '';
+      if (container) container.style.display = 'inline-flex';
+      if (runBtn)    runBtn.disabled = $('eviltwinPhishSelect').value === '';
     } else {
-      if (phishContainer) phishContainer.style.display = 'none';
-      if (runBtn) runBtn.disabled = state.selectedTargets.length === 0;
+      if (container) container.style.display = 'none';
+      if (runBtn)    runBtn.disabled = state.selectedTargets.length === 0;
     }
   }
 
-  // ==================== LOAD PHISHING PAGES ====================
-  async function loadPhishingPages() {
-    const res = await api(API.FILES_LIST);
-    const files = res.files || [];
-
-    // DevilTwin pages
-    const dtFiles = files.filter(f => f.startsWith('DevilTwin/') && f.toLowerCase().endsWith('.html'));
-    const phishSelect = $('eviltwinPhishSelect');
-    if (phishSelect) {
-      phishSelect.innerHTML = '<option value="">── SELECT .html ──</option>';
-      dtFiles.forEach(f => {
-        const opt = document.createElement('option');
-        opt.value = f;
-        opt.textContent = f.replace('DevilTwin/', '');
-        phishSelect.appendChild(opt);
-      });
-      if (dtFiles.length === 0) {
-        phishSelect.innerHTML = '<option value="">── NO PAGES ──</option>';
-      }
-    }
-
-    // Fishing_Web pages for beacon spam
-    state.fishingFiles = files.filter(f => f.startsWith('Fishing_Web/') && f.toLowerCase().endsWith('.html'));
+  function onPhishSelectChange() {
+    $('runAttackBtn').disabled = $('eviltwinPhishSelect').value === '';
   }
 
-  // ==================== RUN / STOP ATTACKS ====================
   async function runAttack() {
     const attackType = $('attackSelect').value;
     if (!attackType) { addLog('attackLog', 'ERROR: Select an attack type', 'error'); return; }
@@ -1297,53 +1305,54 @@
       const targets = state.selectedTargets.map(t => ({
         bssid: t.bssid || '', ssid: t.ssid || '', channel: t.channel || 1, is_5ghz: t.is_5ghz || false
       }));
-      if (targets.length === 0) { addLog('attackLog', 'ERROR: Select targets first', 'error'); return; }
+      if (targets.length === 0) { addLog('attackLog', 'ERROR: No targets selected', 'error'); return; }
       addLog('attackLog', `Launching DEAUTH on ${targets.length} target(s)...`, 'warn');
-      const res = await api(API.DEAUTH_START, 'POST', { targets });
-      if (res.status) addLog('attackLog', res.status, 'success');
+      const res = await api(CONFIG.DEAUTH_START, 'POST', { targets });
+      if (res.status === 'ok' || res.success) addLog('attackLog', 'Deauth attack started!', 'success');
       else addLog('attackLog', `Deauth failed: ${res.error || 'Unknown'}`, 'error');
-    }
-    else if (attackType === 'eviltwin') {
+
+    } else if (attackType === 'eviltwin') {
       const phishSelect = $('eviltwinPhishSelect');
-      const phishPage = phishSelect ? phishSelect.value : '';
+      const phishPage   = phishSelect ? phishSelect.value : '';
       if (!phishPage) { addLog('attackLog', 'ERROR: Select a DevilTwin phishing .html page', 'error'); return; }
-
-      // Pick first selected or first scanned AP as target
-      let target = state.selectedTargets.length > 0 ? state.selectedTargets[0] : null;
-      if (!target && state.results24.length > 0) target = state.results24[0];
-      if (!target) { addLog('attackLog', 'ERROR: No target AP available. Scan first.', 'error'); return; }
-
-      addLog('attackLog', `Launching EVILTWIN on ${target.ssid}...`, 'warn');
-      const res = await api(API.EVILTWIN_START, 'POST', {
+      const target = state.selectedTargets.length > 0
+        ? state.selectedTargets[0]
+        : (state.scanResults24.length > 0 ? state.scanResults24[0] : null);
+      if (!target) { addLog('attackLog', 'ERROR: No target — scan first', 'error'); return; }
+      addLog('attackLog', `Launching EVILTWIN on '${target.ssid}'...`, 'warn');
+      const res = await api(CONFIG.EVILTWIN_START, 'POST', {
         ssid: target.ssid, bssid: target.bssid, channel: target.channel,
         is_5ghz: target.is_5ghz || false, phishing_page: phishPage
       });
-      if (res.status) addLog('attackLog', res.status, 'success');
+      if (res.status === 'ok' || res.success) addLog('attackLog', `EvilTwin started on '${target.ssid}'`, 'success');
       else addLog('attackLog', `EvilTwin failed: ${res.error || 'Unknown'}`, 'error');
-    }
-    else {
-      addLog('attackLog', `ERROR: Unknown attack type: ${attackType}`, 'error');
     }
   }
 
   async function stopAttack() {
-    await api(API.DEAUTH_STOP);
-    await api(API.EVILTWIN_STOP);
+    await api(CONFIG.DEAUTH_STOP);
+    await api(CONFIG.EVILTWIN_STOP);
     addLog('attackLog', 'All attacks stopped', 'info');
   }
 
   // ==================== BEACON SPAM ====================
+  async function loadFishingWebFiles() {
+    const res   = await api(CONFIG.FILES_LIST);
+    const files = res.files || [];
+    state.fishingFiles = files.filter(f => f.startsWith('Fishing_Web/') && f.toLowerCase().endsWith('.html'));
+  }
+
   function addSsidEntry(ssidVal, qtyVal) {
     const list = $('ssidList');
-    const div = document.createElement('div');
+    const div  = document.createElement('div');
     div.className = 'ssid-entry';
     let fishOptions = '<option value="">No Fishing</option>';
     state.fishingFiles.forEach(f => {
       fishOptions += `<option value="${f}">${f.replace('Fishing_Web/', '')}</option>`;
     });
     div.innerHTML = `
-      <input class="input-field" type="text" placeholder="Fake SSID..." value="${escapeHtml(ssidVal||'')}">
-      <input class="input-field qty-input" type="number" value="${qtyVal||1}" min="1" max="99">
+      <input class="input-field" type="text" placeholder="Fake SSID..." value="${escapeHtml(ssidVal || '')}">
+      <input class="input-field qty-input" type="number" value="${qtyVal || 1}" min="1" max="99">
       <select class="styled-select" style="min-width:100px;flex:none;">${fishOptions}</select>
       <button class="ssid-remove">✕</button>
     `;
@@ -1355,43 +1364,44 @@
     const entries = document.querySelectorAll('#ssidList .ssid-entry');
     const ssids = [], quantities = [], fishingPages = [];
     entries.forEach(e => {
-      const inputs = e.querySelectorAll('input'), selects = e.querySelectorAll('select');
-      const name = inputs[0] ? inputs[0].value.trim() : '';
-      const qty = inputs[1] ? parseInt(inputs[1].value) || 1 : 1;
-      const fish = selects[0] ? selects[0].value : '';
-      if (name) { ssids.push(name); quantities.push(qty); fishingPages.push(fish||''); }
+      const inputs  = e.querySelectorAll('input');
+      const selects = e.querySelectorAll('select');
+      const name = inputs[0]  ? inputs[0].value.trim()        : '';
+      const qty  = inputs[1]  ? parseInt(inputs[1].value) || 1 : 1;
+      const fish = selects[0] ? selects[0].value               : '';
+      if (name) { ssids.push(name); quantities.push(qty); fishingPages.push(fish || ''); }
     });
     if (ssids.length === 0) { addLog('beaconLog', 'ERROR: Add at least one SSID', 'error'); return; }
     addLog('beaconLog', `Starting beacon spam: ${ssids.length} SSID config(s)...`, 'warn');
-    const res = await api(API.BEACON_START, 'POST', { ssids, quantities, fishing_pages: fishingPages });
-    if (res.status) addLog('beaconLog', res.status, 'success');
+    const res = await api(CONFIG.BEACON_START, 'POST', { ssids, quantities, fishing_pages: fishingPages });
+    if (res.status === 'ok' || res.success || res.status) addLog('beaconLog', res.status || 'Beacon spam active!', 'success');
     else addLog('beaconLog', `Failed: ${res.error || 'Unknown'}`, 'error');
   }
 
   async function stopBeaconSpam() {
-    await api(API.BEACON_STOP);
+    await api(CONFIG.BEACON_STOP);
     addLog('beaconLog', 'Beacon spam stopped', 'info');
   }
 
   // ==================== JAMMER ====================
   async function toggleWifiJammer() {
     if (state.wifiJammerActive) {
-      await api(API.JAMMER_STOP);
+      await api(CONFIG.JAMMER_STOP);
       state.wifiJammerActive = false;
-      $('wifiJammerBtn').textContent = 'START WIFI JAMMING';
+      $('wifiJammerBtn').textContent   = 'START WIFI JAMMING';
       $('wifiJammerStatus').textContent = '● INACTIVE';
-      $('wifiJammerStatus').className = 'jammer-status';
+      $('wifiJammerStatus').className  = 'jammer-status';
       $('wifiJammerCard').classList.remove('active-jamming');
       addLog('jammerLog', 'WiFi jammer stopped', 'info');
     } else {
-      const res = await api(API.JAMMER_WIFI);
-      state.wifiJammerActive = res.success || res.status === 'ok';
+      const res = await api(CONFIG.JAMMER_WIFI);
+      state.wifiJammerActive = res.success || res.status === 'ok' || !!res.status;
       if (state.wifiJammerActive) {
-        $('wifiJammerBtn').textContent = '■ STOP WIFI JAMMING';
+        $('wifiJammerBtn').textContent   = '■ STOP WIFI JAMMING';
         $('wifiJammerStatus').textContent = '● ACTIVE';
-        $('wifiJammerStatus').className = 'jammer-status active';
+        $('wifiJammerStatus').className  = 'jammer-status active';
         $('wifiJammerCard').classList.add('active-jamming');
-        addLog('jammerLog', 'WiFi jammer ACTIVE!', 'warn');
+        addLog('jammerLog', 'WiFi jammer ACTIVE — flooding all channels!', 'warn');
       } else {
         addLog('jammerLog', `WiFi jammer failed: ${res.error || 'Unknown'}`, 'error');
       }
@@ -1400,37 +1410,46 @@
 
   async function toggleBtJammer() {
     if (state.btJammerActive) {
-      await api(API.JAMMER_STOP);
+      await api(CONFIG.JAMMER_STOP);
       state.btJammerActive = false;
-      $('btJammerBtn').textContent = 'START BT JAMMING';
+      $('btJammerBtn').textContent   = 'START BT JAMMING';
       $('btJammerStatus').textContent = '● INACTIVE';
-      $('btJammerStatus').className = 'jammer-status';
+      $('btJammerStatus').className  = 'jammer-status';
       $('btJammerCard').classList.remove('active-jamming');
       addLog('jammerLog', 'BT jammer stopped', 'info');
     } else {
-      const res = await api(API.JAMMER_BT);
-      state.btJammerActive = res.success || res.status === 'ok';
+      const res = await api(CONFIG.JAMMER_BT);
+      state.btJammerActive = res.success || res.status === 'ok' || !!res.status;
       if (state.btJammerActive) {
-        $('btJammerBtn').textContent = '■ STOP BT JAMMING';
+        $('btJammerBtn').textContent   = '■ STOP BT JAMMING';
         $('btJammerStatus').textContent = '● ACTIVE';
-        $('btJammerStatus').className = 'jammer-status active';
+        $('btJammerStatus').className  = 'jammer-status active';
         $('btJammerCard').classList.add('active-jamming');
-        addLog('jammerLog', 'BT jammer ACTIVE!', 'warn');
+        addLog('jammerLog', 'BT jammer ACTIVE — flooding BLE + Classic BT!', 'warn');
       } else {
         addLog('jammerLog', `BT jammer failed: ${res.error || 'Unknown'}`, 'error');
       }
     }
   }
 
+  // Exposed to HTML onclick attributes on Jammer panel
+  window.jammerWiFiStart = () => toggleWifiJammer();
+  window.jammerBTStart   = () => toggleBtJammer();
+
   // ==================== WIFI DUCK ====================
   function setupDuckyFileUpload() {
     const uploadZone = $('duckyUploadZone');
-    const fileInput = $('duckyFileInput');
+    const fileInput  = $('duckyFileInput');
     if (!uploadZone || !fileInput) return;
 
     uploadZone.addEventListener('click', () => fileInput.click());
-    uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.style.borderColor='var(--accent)'; });
-    uploadZone.addEventListener('dragleave', () => { uploadZone.style.borderColor='var(--border2)'; });
+    uploadZone.addEventListener('dragover', e => {
+      e.preventDefault();
+      uploadZone.style.borderColor = 'var(--accent)';
+    });
+    uploadZone.addEventListener('dragleave', () => {
+      uploadZone.style.borderColor = 'var(--border2)';
+    });
     uploadZone.addEventListener('drop', e => {
       e.preventDefault();
       uploadZone.style.borderColor = 'var(--border2)';
@@ -1444,23 +1463,23 @@
 
   function handleDuckyFile(file) {
     if (!file.name.toLowerCase().endsWith('.txt')) {
-      addLog('duckyLog', `ERROR: Only .txt files allowed (got ${file.name})`, 'error');
+      addLog('duckyLog', `ERROR: Only .txt files allowed (got: ${file.name})`, 'error');
       return;
     }
     const reader = new FileReader();
-    reader.onload = function(e) {
+    reader.onload = function (e) {
       const content = e.target.result;
+      state.duckyFileContent = content;
+
       const preview = $('duckyFilePreview');
       if (preview) preview.value = content;
-
-      state.duckyFileContent = content;
 
       const fileList = $('duckyFileList');
       if (fileList) {
         fileList.innerHTML = `<div class="file-item">
           <span class="file-icon">📜</span>
           <span class="file-name">${file.name}</span>
-          <span class="file-size">${(file.size/1024).toFixed(1)} KB</span>
+          <span class="file-size">${(file.size / 1024).toFixed(1)} KB</span>
           <button class="btn btn-ghost btn-xs remove-file-btn">✕</button>
         </div>`;
         fileList.querySelector('.remove-file-btn').addEventListener('click', () => {
@@ -1470,7 +1489,7 @@
           addLog('duckyLog', 'File removed', 'info');
         });
       }
-      addLog('duckyLog', `Loaded: ${file.name} (${(file.size/1024).toFixed(1)} KB)`, 'success');
+      addLog('duckyLog', `Loaded: ${file.name} (${(file.size / 1024).toFixed(1)} KB)`, 'success');
     };
     reader.readAsText(file);
   }
@@ -1479,7 +1498,7 @@
     const payload = $('duckyPayload').value.trim();
     if (!payload) { addLog('duckyLog', 'ERROR: Write a script first', 'error'); return; }
     addLog('duckyLog', 'Injecting written script...', 'warn');
-    const res = await api(API.DUCKY_INJECT, 'POST', { script: payload });
+    const res = await api(CONFIG.DUCKY_INJECT, 'POST', { script: payload });
     const box = $('duckyCapturedBox');
     if (res.status === 'ok' || res.success) {
       addLog('duckyLog', 'Injection complete!', 'success');
@@ -1490,21 +1509,24 @@
     }
   }
 
-  async function duckyFileInject() {
-    if (!state.duckyFileContent) { addLog('duckyLog', 'ERROR: Upload a .txt file first', 'error'); return; }
+  // Exposed for HTML onclick (duckyFileInjectBtn uses onclick="uploadAndInject()")
+  window.uploadAndInject = async function () {
+    if (!state.duckyFileContent) {
+      addLog('duckyLog', 'ERROR: Upload a .txt file first', 'error');
+      return;
+    }
     addLog('duckyLog', 'Injecting from file...', 'warn');
-    const res = await api(API.DUCKY_INJECT, 'POST', { script: state.duckyFileContent });
+    const res = await api(CONFIG.DUCKY_INJECT, 'POST', { script: state.duckyFileContent });
     const box = $('duckyCapturedBox');
     if (res.status === 'ok' || res.success) {
-      addLog('duckyLog', 'Injection from file complete!', 'success');
+      addLog('duckyLog', 'File injection complete!', 'success');
       if (box) box.innerHTML = `<div class="captured-entry"><span class="cap-time">[${new Date().toLocaleTimeString()}]</span> File injection complete</div>`;
     } else {
       addLog('duckyLog', `Injection failed: ${res.error || 'Failed to fetch'}`, 'error');
       if (box) box.innerHTML = `<div class="captured-entry"><span class="cap-time">[${new Date().toLocaleTimeString()}]</span> <span style="color:var(--accent2)">Injection failed: ${res.error || 'Failed to fetch'}</span></div>`;
     }
-  }
+  };
 
-  // ==================== DUCKY MODE TABS ====================
   function setupDuckyModeTabs() {
     document.querySelectorAll('.ducky-mode-btn').forEach(btn => {
       btn.addEventListener('click', () => {
@@ -1518,14 +1540,9 @@
     });
   }
 
-  // ==================== EVILTWIN PHISH SELECT ====================
-  function onPhishSelectChange() {
-    $('runAttackBtn').disabled = $('eviltwinPhishSelect').value === '';
-  }
-
   // ==================== CAPTURED DATA ====================
   async function refreshCapturedData() {
-    const res = await api(API.CAPTURED);
+    const res = await api(CONFIG.CAPTURED);
     const box = $('capturedBox');
     if (!box) return;
     const data = res.data || [];
@@ -1534,14 +1551,18 @@
       return;
     }
     box.innerHTML = data.slice(-10).reverse().map(d =>
-      `<div class="captured-entry"><span class="cap-time">[${d.time||'??'}]</span> <span class="cap-ssid">${escapeHtml(d.ssid)}</span> <span class="cap-pass">${escapeHtml(d.password)}</span></div>`
+      `<div class="captured-entry">
+        <span class="cap-time">[${d.time || '??'}]</span>
+        <span class="cap-ssid">${escapeHtml(d.ssid)}</span>
+        <span class="cap-pass">${escapeHtml(d.password)}</span>
+      </div>`
     ).join('');
   }
 
   // ==================== TEMPLATES ====================
   async function loadTemplates() {
-    const res = await api(API.TEMPLATES);
-    const grid = $('templateGrid');
+    const res       = await api(CONFIG.TEMPLATES);
+    const grid      = $('templateGrid');
     if (!grid) return;
     const templates = res.templates || res || [];
     if (!Array.isArray(templates) || templates.length === 0) {
@@ -1550,63 +1571,79 @@
     }
     grid.innerHTML = templates.map((t, idx) => `
       <div class="template-card" data-id="${t.id || idx}">
-        <div class="template-icon">${t.use_jammer?'🚫':t.use_eviltwin?'👥':t.use_beacon_spam?'📶':t.use_pmkid_capture?'🔑':t.auto_chain?'⚡':'📡'}</div>
+        <div class="template-icon">${t.use_jammer ? '🚫' : t.use_eviltwin ? '👥' : t.use_beacon_spam ? '📶' : t.use_pmkid_capture ? '🔑' : t.auto_chain ? '⚡' : '📡'}</div>
         <div class="template-name">${escapeHtml(t.name)}</div>
-        <div class="template-desc">${escapeHtml(t.description||'')}</div>
+        <div class="template-desc">${escapeHtml(t.description || '')}</div>
         <div class="template-meta">
-          <span>⏱ ${t.estimated_time_sec||'?'}s</span>
-          ${t.use_deauth?'<span class="tag tag-red">DEAUTH</span>':''}
-          ${t.use_pmkid_capture?'<span class="tag tag-blue">PMKID</span>':''}
-          ${t.use_jammer?'<span class="tag tag-red">JAM</span>':''}
-          ${t.auto_chain?'<span class="tag tag-green">AUTO</span>':''}
+          <span>⏱ ${t.estimated_time_sec || '?'}s</span>
+          ${t.use_deauth           ? '<span class="tag tag-red">DEAUTH</span>'  : ''}
+          ${t.use_pmkid_capture    ? '<span class="tag tag-blue">PMKID</span>'  : ''}
+          ${t.use_jammer           ? '<span class="tag tag-red">JAM</span>'     : ''}
+          ${t.auto_chain           ? '<span class="tag tag-green">AUTO</span>'  : ''}
         </div>
-        <button class="btn btn-primary btn-sm btn-block" onclick="deployTemplate(${t.id||idx})">▶ DEPLOY</button>
+        <button class="btn btn-primary btn-sm btn-block" onclick="deployTemplate(${t.id || idx})">▶ DEPLOY</button>
       </div>
     `).join('');
   }
 
-  window.deployTemplate = async function(id) {
+  window.deployTemplate = async function (id) {
     addLog('templateLog', `Deploying template #${id}...`, 'warn');
-    const res = await api(API.TEMPLATE_DEPLOY, 'POST', { template_id: id });
+    const res = await api(CONFIG.TEMPLATE_DEPLOY, 'POST', { template_id: id });
     if (res.status === 'ok' || res.success) addLog('templateLog', 'Template deployed!', 'success');
-    else addLog('templateLog', `Failed: ${res.error||'Unknown'}`, 'error');
+    else addLog('templateLog', `Failed: ${res.error || 'Unknown'}`, 'error');
   };
 
-  // ==================== EVENT BINDINGS ====================
-  $('scanBtn').addEventListener('click', runScan);
-  $('attackSelect').addEventListener('change', onAttackTypeChange);
-  $('eviltwinPhishSelect').addEventListener('change', onPhishSelectChange);
-  $('runAttackBtn').addEventListener('click', runAttack);
-  $('stopAttackBtn').addEventListener('click', stopAttack);
-  $('addSsidBtn').addEventListener('click', () => addSsidEntry());
-  $('runBeaconBtn').addEventListener('click', runBeaconSpam);
-  $('stopBeaconBtn').addEventListener('click', stopBeaconSpam);
-  $('wifiJammerBtn').addEventListener('click', toggleWifiJammer);
-  $('btJammerBtn').addEventListener('click', toggleBtJammer);
-  $('duckyInjectBtn').addEventListener('click', duckyWriteInject);
-  $('duckyClearBtn').addEventListener('click', () => { $('duckyPayload').value=''; addLog('duckyLog','Script cleared','info'); });
-  $('duckyFileInjectBtn').addEventListener('click', duckyFileInject);
-  $('duckyClearCaptured').addEventListener('click', () => { $('duckyCapturedBox').innerHTML='<div class="empty-state">// no output captured yet</div>'; });
+  // ==================== TAB NAVIGATION ====================
+  document.querySelectorAll('.nav-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.nav-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+      btn.classList.add('active');
+      const panel = $(`panel-${btn.dataset.panel}`);
+      if (panel) panel.classList.add('active');
+    });
+  });
 
-  // ==================== MAIN INIT ====================
+  // ==================== EVENT BINDINGS ====================
+  $('scanBtn')             .addEventListener('click', runScan);
+  $('attackSelect')        .addEventListener('change', onAttackTypeChange);
+  $('eviltwinPhishSelect') .addEventListener('change', onPhishSelectChange);
+  $('runAttackBtn')        .addEventListener('click', runAttack);
+  $('stopAttackBtn')       .addEventListener('click', stopAttack);
+  $('addSsidBtn')          .addEventListener('click', () => addSsidEntry());
+  $('runBeaconBtn')        .addEventListener('click', runBeaconSpam);
+  $('stopBeaconBtn')       .addEventListener('click', stopBeaconSpam);
+  $('wifiJammerBtn')       .addEventListener('click', toggleWifiJammer);
+  $('btJammerBtn')         .addEventListener('click', toggleBtJammer);
+  $('duckyInjectBtn')      .addEventListener('click', duckyWriteInject);
+  $('duckyClearBtn')       .addEventListener('click', () => {
+    $('duckyPayload').value = '';
+    addLog('duckyLog', 'Script cleared', 'info');
+  });
+  $('duckyFileInjectBtn')  .addEventListener('click', window.uploadAndInject);
+  $('duckyClearCaptured')  .addEventListener('click', () => {
+    $('duckyCapturedBox').innerHTML = '<div class="empty-state">// no output captured yet</div>';
+  });
+
+  // ==================== INIT ====================
+  (async function init() {
+    await loadFishingWebFiles();
+    await loadEviltwinPhishingPages();
+    addSsidEntry('', 1);
+    setupDuckyFileUpload();
+    setupDuckyModeTabs();
+    onAttackTypeChange();
+  })();
+
   pollStatus();
   setInterval(pollStatus, 10000);
   setInterval(refreshCapturedData, 3000);
   loadTemplates();
-  loadPhishingPages().then(() => {
-    // Add initial SSID entry
-    addSsidEntry('', 1);
-  });
-  setupDuckyFileUpload();
-  setupDuckyModeTabs();
-  onAttackTypeChange();
 
-  // Initial logs
-  addLog('attackLog', 'System ready.', 'info');
   addLog('attackLog', 'PWN DUAL v3.0 ready — select targets and attack!', 'success');
   addLog('beaconLog', 'Beacon spam idle. Add SSIDs and run.', 'info');
-  addLog('jammerLog', 'Jammer idle.', 'info');
-  addLog('duckyLog', 'WiFi Duck armed. ✏️ Write script or 📁 upload .txt file.', 'info');
+  addLog('jammerLog', 'Jammer idle. Click to start.', 'info');
+  addLog('duckyLog',  'WiFi Duck armed. ✏️ Write script or 📁 upload .txt file.', 'info');
 
 })();
 </script>
