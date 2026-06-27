@@ -3,7 +3,6 @@ idf_component_register(
         "main.c"
         "wifi/attack.c"
         "wifi/attack_methods.c"
-        "wifi/attack_dos.c"
         "wifi/attack_eviltwin.c"
         "wifi/attack_jammer.c"
         "wifi/attack_bluetooth_jammer.c"

@@ -1,11 +1,17 @@
 /*
  * attack_ducky.c — USB Rubber Ducky / BadUSB HID injection
+ * 
+ * FIX V2: USB connection check before injection
+ * FIX V2: Added missing esp_rom_sys.h include
+ * FIX V2: Better error reporting for large scripts
+ * FIX V2: tud_mounted() check in hid_send_report()
  */
 
 #include "attack_ducky.h"
 #include "esp_log.h"
 #include "tinyusb.h"
 #include "class/hid/hid_device.h"
+#include "esp_rom_sys.h"          // ← FIX V2: ADDED (was missing!)
 #include <string.h>
 #include <stdlib.h>
 
@@ -16,7 +22,21 @@ static volatile bool g_ducky_running = false;
 // HID keyboard report buffer
 static uint8_t hid_keyboard_report[8] = { 0 };
 
+// ← FIX V2: ADDED - USB connection state function
+static bool usb_is_connected(void) {
+    bool mounted = tud_mounted();
+    if (!mounted) {
+        ESP_LOGW(TAG, "⚠️ USB not mounted! Plug ESP32-S3 into a computer via USB.");
+    }
+    return mounted;
+}
+
 static void hid_send_report(void) {
+    // ← FIX V2: ADDED - check USB before sending
+    if (!tud_mounted()) {
+        ESP_LOGW(TAG, "USB not mounted, cannot send HID report");
+        return;
+    }
     tud_hid_n_report(0, 1, hid_keyboard_report, sizeof(hid_keyboard_report));
 }
 
@@ -216,12 +236,18 @@ void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
     // Not used
 }
 
-// ==================== PUBLIC API ====================
+// ==================== PUBLIC API (FIX V2) ====================
 
 int ducky_inject(const char *script) {
     if (!script || !*script) {
         ESP_LOGE(TAG, "Empty or NULL script");
         return -1;
+    }
+    
+    // ← FIX V2: Check USB connection before starting
+    if (!usb_is_connected()) {
+        ESP_LOGE(TAG, "❌ USB not connected to a host! Cannot inject.");
+        return -2;  // ← FIX V2: Different error code for USB not connected
     }
     
     g_ducky_running = true;
@@ -230,7 +256,8 @@ int ducky_inject(const char *script) {
     char *copy = strdup(script);
     if (!copy) {
         g_ducky_running = false;
-        return -1;
+        ESP_LOGE(TAG, "Memory allocation failed for script copy");
+        return -3;
     }
     
     char *saveptr;
@@ -243,6 +270,10 @@ int ducky_inject(const char *script) {
         
         // Skip empty lines and comments
         if (*line && *line != ';' && *line != '#') {
+            // ← FIX V2: Small delay between lines for stability on large scripts
+            if (line_count > 0 && line_count % 10 == 0) {
+                vTaskDelay(pdMS_TO_TICKS(5));
+            }
             execute_line(line);
             line_count++;
         }
@@ -253,8 +284,13 @@ int ducky_inject(const char *script) {
     free(copy);
     g_ducky_running = false;
     
-    ESP_LOGI(TAG, "Ducky injection COMPLETE - %d lines executed", line_count);
-    return line_count > 0 ? 0 : -1;
+    if (line_count > 0) {
+        ESP_LOGI(TAG, "✅ Ducky injection COMPLETE - %d lines executed", line_count);
+        return 0;
+    } else {
+        ESP_LOGW(TAG, "Ducky injection: no lines were executed");
+        return -4;
+    }
 }
 
 void ducky_stop(void) {
