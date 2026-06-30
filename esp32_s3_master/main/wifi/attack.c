@@ -218,6 +218,13 @@ static void chain_task_func(void *pv) {
     vTaskDelete(NULL);
 }
 
+void attack_init(void)
+{
+    ESP_LOGI(TAG, "Attack module initialized");
+    attack_deauth_init();
+    pmkid_capture_init();
+}
+
 // ==================== CHAIN PUBLIC API ====================
 void attack_chain_start(void) {
     if (g_chain.running) {
